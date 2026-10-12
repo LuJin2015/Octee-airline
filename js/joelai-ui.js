@@ -5,11 +5,11 @@ import { proConverse } from "./joelpro.js";
 import { actionRow, stopSpeaking } from "./chatextras.js";
 import { converse, GREETING, CHIPS, resetState, setPage } from "./joelbrain.js";
 import { currentUser } from "./auth.js";
-import { proFree } from "./perks.js";
+import { proFree, modelsFree } from "./perks.js";
 import { smartState, onSmart, enableSmart, disableSmart, smartReady, smartSupport, tinyJoelReply } from "./gullet-smart.js";
-import { buyJoelPro, joelTokensOf, joelUsageMonth, JOEL_PRO_PRICE, JOEL_TOKEN_RATE, JOEL_MONTHLY_GRANT, JOEL_MIN_CALL_RESERVE } from "./miles.js";
-import { JOEL_MODELS, JOEL_MODEL_DEFAULT } from "./joel-models.js";
-import { modelStatus, hasLedger, unlockPro, buyJoelTokens, askModel, ModelError } from "./joelwallet.js";
+import { buyJoelPro, chargeJoelFlat, joelTokensOf, joelUsageMonth, JOEL_PRO_PRICE, JOEL_TOKEN_RATE, JOEL_MONTHLY_GRANT, JOEL_MIN_CALL_RESERVE } from "./miles.js";
+import { JOEL_MODELS, JOEL_MODEL_DEFAULT, JOEL_MODEL_RENAMED } from "./joel-models.js";
+import { modelStatus, hasLedger, unlockPro, buyJoelTokens, askModel, spendFlat, ModelError } from "./joelwallet.js";
 
 const KEY = "octee.joelai";
 const MODEL_KEY = "octee.joelai.model";
@@ -35,12 +35,16 @@ export function mountJoelAI(box, idSuffix = "q") {
   setPage(here);
   // chosen = what the visitor picked (null = never picked). The default is Joel-3.3, but only where the model server answers.
   let chosen = load(MODEL_KEY, null);
+  if (chosen && Object.hasOwn(JOEL_MODEL_RENAMED, chosen)) chosen = JOEL_MODEL_RENAMED[chosen];
   if (chosen && !JOEL_MODELS.some((m) => m.id === chosen)) chosen = null;
   let modelInfo = { state: "checking", why: "" };
   const modelReady = () => modelInfo.state === "ready" && hasLedger();
-  const selectedId = () => chosen || (modelReady() ? JOEL_MODEL_DEFAULT : "handbook");
+  const selectedId = () => chosen || JOEL_MODEL_DEFAULT;
   const selectedModelObj = () => JOEL_MODELS.find((m) => m.id === selectedId()) || JOEL_MODELS[0];
-  const handbookModel = JOEL_MODELS.find((m) => !m.model);
+  const handbookModel = JOEL_MODELS.find((m) => m.kind === "regular");
+  // flat-price models (Joel-3.3 Pro, Joel-4.3 NEO): free for accounts the Control Tower lists, otherwise a set number of JoelTokens an answer
+  const flatPrice = (m, u = currentUser()) => (m.flat && !modelsFree(u) ? m.flat : 0);
+  const priceNote = (m, u = currentUser()) => (m.flat ? (modelsFree(u) ? `${m.name} is free for this account.` : `${m.name} costs ${m.flat} JoelTokens an answer, charged only when it answers.`) : "");
   const log = el("div", { class: "jai-log", role: "log", "aria-live": "polite", "aria-label": "Conversation with JoelAI" });
   const input = el("input", { type: "text", id: "jai-" + idSuffix, maxlength: "200", autocomplete: "off", placeholder: "Ask about gates, flights, security, bags, Octmiles…" });
   const send = el("button", { class: "btn", type: "submit" }, "Ask");
@@ -77,7 +81,8 @@ export function mountJoelAI(box, idSuffix = "q") {
     const note = s.phase === "off" || !s.note ? "TinyLlama-1.1B-Chat runs inside your browser: nothing is sent to a server and it costs no JoelTokens. The first time it downloads several hundred MB. It can be wrong, slow or strange, so the handbook answer is shown under each reply." : s.note + (s.phase === "failed" && s.error ? " (" + s.error + ")" : "");
     proBox.replaceChildren(
       el("div", { class: "jai-pro-row" }, el("strong", {}, "JoelAI Pro"), choices),
-      el("p", { class: "jai-answering" }, "Answering with: ", el("span", { class: "tag" }, s.phase === "ready" ? "Joel-TinyLlama · in your browser · free" : "Handbook Pro (TinyLlama is not running yet)")),
+      el("p", { class: "jai-answering" }, "Answering with: ", el("span", { class: "tag" }, s.phase === "ready" ? `${model.name} · TinyLlama in your browser` : "Joel-3.0 (TinyLlama is not running yet, so nothing is charged)")),
+      el("p", { class: "note" }, priceNote(model)),
       el("p", { class: "jai-status" + (s.phase === "failed" ? " warn" : s.phase === "ready" ? " ok" : "") }, note),
       s.phase === "loading" ? el("progress", { max: "100", value: String(s.pct || 0), style: "width:100%", "aria-label": "Model download" }) : "",
       el("p", { class: "actions" }, btn));
@@ -115,14 +120,15 @@ export function mountJoelAI(box, idSuffix = "q") {
 
     // 1. which model is answering, and can it?
     let status;
-    if (modelInfo.state === "checking") status = el("p", { class: "jai-status" }, "Checking the model server…");
+    if (!model.model) status = el("p", { class: "jai-status ok" }, "No model server needed. " + (priceNote(model, u) || "Free."));
+    else if (modelInfo.state === "checking") status = el("p", { class: "jai-status" }, "Checking the model server…");
     else if (modelInfo.state !== "ready") {
       status = el("p", { class: "jai-status warn" }, el("strong", {}, "Model unavailable here. "), modelInfo.why + " ",
         modelInfo.state === "file" ? "Run the site through a local server, or deploy it to Vercel with the AI service switched on, to get model answers. " : modelInfo.state === "none" ? "Model answers need the site on Vercel (or JOELAI_API_URL pointing at it). " : "",
-        model.model ? el("button", { class: "btn small ghost", type: "button", onclick: () => { chosen = handbookModel.id; save(MODEL_KEY, chosen); drawPro(); } }, "Use Handbook JoelAI") : el("span", {}, "Handbook JoelAI is answering."),
+        model.model ? el("button", { class: "btn small ghost", type: "button", onclick: () => { chosen = handbookModel.id; save(MODEL_KEY, chosen); drawPro(); } }, "Use Joel-3.0") : el("span", {}, "Joel-3.0 is answering."),
         " ", el("button", { class: "linklike", type: "button", onclick: async () => { modelInfo = { state: "checking", why: "" }; drawPro(); modelInfo = await modelStatus(true); drawPro(); } }, "Check again"));
     } else status = !hasLedger() ? el("p", { class: "jai-status warn" }, el("strong", {}, "Model unavailable here. "), "Model answers need a cloud account. ", el("a", { href: "login.html?next=" + encodeURIComponent(here) }, "Log in"), ", or keep using Handbook JoelAI.") : el("p", { class: "jai-status ok" }, "Model server ready.");
-    const answering = usingModel ? `${model.name} · ${model.detail}` : model.model ? "Handbook Pro (the model is unavailable, so Joel uses the handbook)" : "Handbook Pro · free, works everywhere";
+    const answering = usingModel ? `${model.name} · ${model.detail}` : model.model ? "Joel-3.0 (the model is unavailable, so Joel uses the handbook)" : `${model.name} · ${model.detail}`;
 
     // 2. the wallet, shown the same way everywhere (the numbers come from the server's ledger)
     const month = u.joelUsage?.month === joelUsageMonth() ? u.joelUsage : { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
@@ -135,7 +141,7 @@ export function mountJoelAI(box, idSuffix = "q") {
         el("li", {}, `Monthly allowance: ${fmtMiles(Math.max(0, JOEL_MONTHLY_GRANT - usedMonthly))} of ${fmtMiles(JOEL_MONTHLY_GRANT)} left · refreshes ${resetDate} UTC`),
         el("li", {}, `Bought with Octeetokens: ${fmtMiles(Math.max(0, u.joelPaidTokens || 0))} (carries over)`),
         el("li", {}, `Used this month: ${fmtMiles(month.totalTokens)} model tokens (${fmtMiles(month.inputTokens)} in + ${fmtMiles(month.outputTokens)} out)`)),
-      el("p", { class: "note" }, hasLedger() ? "Charged 1:1 from the input and output tokens the model reports, and counted by the cloud, not by this browser. A failed request costs nothing. The last four chat messages go to the model provider: no passwords or sensitive details." : "Handbook Pro costs no JoelTokens."));
+      el("p", { class: "note" }, hasLedger() ? "Charged 1:1 from the input and output tokens the model reports, and counted by the cloud, not by this browser. A failed request costs nothing. The last four chat messages go to the model provider: no passwords or sensitive details." : "Joel-3.0 costs no JoelTokens."));
     const topups = hasLedger() ? [1, 5, 10].map((n) => el("button", { class: "btn small ghost", type: "button", disabled: (u.tokens || 0) < n, onclick: (e) => pending(e.target, async () => { await buyJoelTokens(n); drawPro(); }) }, `+${fmtMiles(n * JOEL_TOKEN_RATE)} JoelTokens · ${n} Octeetoken${n === 1 ? "" : "s"}`)) : [];
     proBox.replaceChildren(
       el("div", { class: "jai-pro-row" }, el("strong", {}, "JoelAI Pro"), choices),
@@ -144,7 +150,7 @@ export function mountJoelAI(box, idSuffix = "q") {
   }
 
   async function proAnswer(selected, messages) {
-    const reserve = JOEL_MIN_CALL_RESERVE + messages.reduce((n, m) => n + m.content.length, 0);
+    const reserve = (selected.reserve || JOEL_MIN_CALL_RESERVE) + messages.reduce((n, m) => n + m.content.length, 0);
     const u = currentUser();
     if (!u) throw new ModelError("Log in to use JoelAI Pro. Nothing was charged.");
     if (joelTokensOf(u) < reserve) throw new ModelError(`Keep ${fmtMiles(reserve)} JoelTokens available for this chat first. Buy a top-up above. Nothing was charged.`);
@@ -166,21 +172,32 @@ export function mountJoelAI(box, idSuffix = "q") {
     const pro = !!currentUser()?.joelPro;
     const sel = selectedModelObj();
     const messages = history.filter((m) => m.who === "me" || m.who === "bot").slice(-4).map((m) => ({ role: m.who === "me" ? "user" : "assistant", content: String(m.text).slice(0, 300) }));
+    // Joel-3.0 (the regular handbook) is the fallback for every Pro model, and it is always free.
+    const regular = async (note, via) => { const r = await converse(text); if (note) r.note = note; if (via) r.via = via; return r; };
+    // flat-price models: the answer is made first, and the price is taken only if it worked. If the charge fails, Joel-3.0 answers instead.
+    const settle = async (r) => {
+      const price = flatPrice(sel);
+      if (!price) return { ...r, via: (r.via ? r.via + " " : "") + `${sel.name} is free for this account.` };
+      if (hasLedger()) await spendFlat(sel.id); else chargeJoelFlat(price, sel.name);
+      drawPro();
+      return { ...r, via: (r.via ? r.via + " " : "") + `${sel.name}: ${price} JoelTokens charged.` };
+    };
     try {
-      if (pro && sel.local) {
-        res = await proConverse(text);
-        const hb = res.text, tiny = smartReady() ? await tinyJoelReply(text, hb, history.slice(0, -1)) : null;
-        if (tiny) res = { ...res, text: tiny, handbook: hb, via: "Answered by Joel-TinyLlama in your browser. Nothing was charged." };
-        else res.via = smartReady() ? "TinyLlama could not answer that one, so Handbook JoelAI did." : "TinyLlama is not running yet, so Handbook JoelAI answered. Turn it on in the JoelAI Pro panel.";
-      }
-      else if (pro && sel.model && modelReady()) res = await proAnswer(sel, messages);
-      else if (pro) {
-        res = await proConverse(text);
-        if (sel.model) res.via = `Answered by Handbook JoelAI · ${modelInfo.state === "checking" ? "the model server was still being checked" : "model unavailable here"}. Nothing was charged.`;
-      } else res = await converse(text);
+      if (!pro) res = await converse(text);
+      else if (sel.flat && joelTokensOf(currentUser()) < flatPrice(sel)) {
+        res = await regular(`${sel.name} needs ${flatPrice(sel)} JoelTokens and you have ${fmtMiles(joelTokensOf(currentUser()))}. Joel-3.0 answered instead. Nothing was charged.`);
+      } else if (sel.local) {
+        const base = await proConverse(text), hb = base.text;
+        const tiny = smartReady() ? await tinyJoelReply(text, hb, history.slice(0, -1)) : null;
+        if (tiny) res = await settle({ ...base, text: tiny, handbook: hb, via: "Answered by Joel-4.3 NEO (TinyLlama in your browser)." });
+        else res = await regular("", smartReady() ? `${sel.name} could not answer that one, so Joel-3.0 did. Nothing was charged.` : `${sel.name} is not running yet, so Joel-3.0 answered. Turn it on in the JoelAI Pro panel. Nothing was charged.`);
+      } else if (sel.kind === "handbook") res = await settle(await proConverse(text));
+      else if (sel.model && modelReady()) res = await proAnswer(sel, messages);
+      else if (sel.model) res = await regular("", `Answered by Joel-3.0 · ${modelInfo.state === "checking" ? "the model server was still being checked" : "model unavailable here"}. Nothing was charged.`);
+      else res = await converse(text);
     } catch (e) {
-      // the model failed before anything was charged: the handbook answers, and says so in one line
-      if (pro && sel.model) { try { res = await proConverse(text); res.note = `${e.message || "The model could not answer."} Handbook JoelAI answered instead.`; } catch {} }
+      // the model failed before anything was charged (or the charge was refused): Joel-3.0 answers, and says so in one line
+      if (pro) { try { res = await regular(`${e.message || "That model could not answer."} Joel-3.0 answered instead.`); } catch {} }
       if (!res) res = { text: e.message || "Something went wrong. Please blame Joel.", links: [], error: true };
       if (e instanceof ModelError) { drawPro(); }
     }

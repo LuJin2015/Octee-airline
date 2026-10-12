@@ -42,6 +42,8 @@ export const getWallet = () => call("GET", "/api/joel");
 // Save the account first so the server sees the Octeetokens you have now; afterwards take the server's copy back.
 export async function unlockPro() { await push(true); const r = await call("POST", "/api/joel/unlock"); await pull(); return r; }
 export async function buyJoelTokens(count) { await push(true); const r = await call("POST", "/api/joel/buy", { count }); await pull(); return r; }
+// A flat-price answer (Joel-3.3 Pro, Joel-4.3 NEO): the cloud checks the price, the perks and the balance, and takes the JoelTokens.
+export async function spendFlat(modelId) { const r = await call("POST", "/api/joel/spend", { model: modelId }); await pull(); return r; }
 export { pull as syncAccount };
 
 // ---- ask the model ----

@@ -131,6 +131,24 @@ export function recordJoelUsage(usage, modelName) {
   });
 }
 
+// A flat JoelToken price for an answer that reports no token usage (Joel-3.3 Pro, Joel-4.3 NEO) on an account that is not in the cloud.
+// Monthly allowance first, then bought JoelTokens. Cloud accounts are charged by the cloud instead (cloud/index.js /api/joel/spend).
+export function chargeJoelFlat(price, modelName) {
+  price = Math.max(0, Math.floor(Number(price) || 0));
+  return updateUser((u) => {
+    if (!u.joelPro) throw new Error("Unlock JoelAI Pro first.");
+    if (joelTokensOf(u) < price) throw new Error(`${modelName} needs ${price} JoelTokens. Nothing was charged.`);
+    const month = joelUsageMonth();
+    const used = u.joelMonthlyUsage?.month === month ? Math.max(0, Math.floor(Number(u.joelMonthlyUsage.usedTokens) || 0)) : 0;
+    const fromMonthly = Math.min(price, Math.max(0, JOEL_MONTHLY_GRANT - used));
+    u.joelMonthlyUsage = { month, usedTokens: used + fromMonthly };
+    u.joelPaidTokens = paidJoelTokensOf(u) - (price - fromMonthly);
+    u.joelTokens = joelTokensOf(u);
+    u.history.unshift({ at: new Date().toISOString(), text: `JoelAI Pro · ${modelName}`, amount: 0, tokens: 0, joelTokens: -price });
+    return price;
+  });
+}
+
 // Use inside updateUser(): takes tokens off the account or throws a friendly error.
 export function spendTokens(u, n, text) {
   if (tokensOf(u) < n) { const short = n - tokensOf(u); throw new Error(`You need ${short} more Octeetoken${short === 1 ? "" : "s"} (this costs ${n}). Exchange Octmiles on the Octmiles page.`); }

@@ -63,7 +63,7 @@ export async function POST(request) {
   }
   if (!safeMessages.length || safeMessages[safeMessages.length - 1].role !== "user") return json(400, { error: "End the conversation with a question for Joel." });
   // The balance is checked on the server, against the ledger, before the model is paid for.
-  const reserve = 1000 + safeMessages.reduce((n, m) => n + m.content.length, 0);
+  const reserve = (selected.reserve || 1000) + safeMessages.reduce((n, m) => n + m.content.length, 0);
   let wallet;
   try {
     const r = await fetch(CLOUD() + "/api/joel", { headers: { authorization: auth }, signal: AbortSignal.timeout(8000) });
@@ -80,7 +80,7 @@ export async function POST(request) {
       model: selected.model,
       system: SYSTEM,
       messages: safeMessages,
-      maxOutputTokens: 300,
+      maxOutputTokens: selected.maxOut || 300,
       timeout: 30_000
     });
     const inputTokens = Number(result.usage?.inputTokens) || 0;

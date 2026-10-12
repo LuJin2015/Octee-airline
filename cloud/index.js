@@ -43,6 +43,16 @@ async function etchedList(env) {
 // Files the Control Tower publishes (instead of downloading them and committing to GitHub). Anyone may read; only a Control Tower owner or admin may write.
 const DATA_NAMES = { codes: (d) => Array.isArray(d.codes), accounts: (d) => Array.isArray(d.accounts), permissions: (d) => d.crew && typeof d.crew === "object" && !Array.isArray(d.crew), "control-tower": (d) => "owner" in d && Array.isArray(d.admins), "flight-discounts": (d) => Array.isArray(d.discounts), perks: (d) => d.unlimitedFujitech && typeof d.unlimitedFujitech === "object" && !Array.isArray(d.unlimitedFujitech) };
 const MAX_DATA = 400 * 1024;
+// Account perks the Control Tower publishes ("perks"). Until a setting is saved there, these defaults apply.
+const DEFAULT_PERKS = { freePro: { octee: true, joel: true }, freeModels: { octee: true, joel: true } };
+async function perkOn(db, key, username) {
+  const row = await db.prepare("SELECT body FROM published WHERE name='perks'").first().catch(() => null);
+  let j = null; try { j = row ? JSON.parse(row.body) : null; } catch { j = null; }
+  const list = j && j[key] && typeof j[key] === "object" ? j[key] : DEFAULT_PERKS[key];
+  return !!list && list[String(username).toLowerCase()] === true;
+}
+// Joel models with a flat JoelToken price (they report no token usage). Mirrors js/joel-models.js.
+const FLAT = { "joel-3.3pro": { price: 150, name: "Joel-3.3 Pro" }, "joel-4.3neo": { price: 400, name: "Joel-4.3 NEO" } };
 const clip = (v, n) => String(v ?? "").slice(0, n);
 
 // ---- JoelAI Pro wallet: Pro flag, purchased JoelTokens, this month's use. Lives on the server only. ----
@@ -166,12 +176,7 @@ export default {
         if (buying && !(count >= 1 && count <= JOEL.maxBuy)) return reply(req, { error: "bad_count", message: `Choose 1 to ${JOEL.maxBuy} Octeetokens.` }, 400);
         if (buying && !w.pro) return reply(req, { error: "not_pro", message: "Unlock JoelAI Pro first." }, 409);
         if (!buying && w.pro) return reply(req, { error: "already", message: "JoelAI Pro is already unlocked." }, 409);
-        let free = false;
-        if (!buying) {
-          const pr = await db.prepare("SELECT body FROM published WHERE name='perks'").first().catch(() => null);
-          let pj = null; try { pj = pr ? JSON.parse(pr.body) : null; } catch { pj = null; }
-          free = pj ? !!(pj.freePro && pj.freePro[u.username.toLowerCase()] === true) : isCloudOwner; // no saved setting yet: the cloud owner gets it
-        }
+        const free = !buying && (await perkOn(db, "freePro", u.username));
         const cost = buying ? count : free ? 0 : JOEL.price;
         const p = await db.prepare("SELECT body, updated_at FROM profiles WHERE user_id=?").bind(u.id).first();
         if (!p) return reply(req, { error: "no_profile", message: "Your account has not been saved to the cloud yet. Try again in a moment." }, 409);
@@ -185,6 +190,27 @@ export default {
         if (!done.meta?.changes) return reply(req, { error: "busy", message: "Your account changed at the same moment. Nothing was charged. Please try again." }, 409);
         await db.batch([saveWallet(db, w), ledgerRow(db, u.id, buying ? "buy" : "unlock", -cost, buying ? count * JOEL.rate : 0)]);
         return reply(req, { ok: true, ...walletView(w), tokens: have - cost, updatedAt: at });
+      }
+      // A flat-price answer (Joel-3.3 Pro, Joel-4.3 NEO). The price, the free list and the balance are all decided here.
+      if (path === "/api/joel/spend" && req.method === "POST") {
+        if (!u) return reply(req, { error: "login", message: "Log in to the cloud first." }, 401);
+        const b = await req.json().catch(() => ({})), m = Object.hasOwn(FLAT, b.model) ? FLAT[b.model] : null;
+        if (!m) return reply(req, { error: "bad_model", message: "That model has no flat price." }, 400);
+        const w = await wallet(db, u.id);
+        if (!w.pro) return reply(req, { error: "not_pro", message: "Unlock JoelAI Pro first." }, 409);
+        if (await perkOn(db, "freeModels", u.username)) return reply(req, { ok: true, charged: 0, free: true, ...walletView(w) });
+        if (balanceOf(w) < m.price) return reply(req, { error: "short", message: `${m.name} needs ${m.price} JoelTokens. Nothing was charged.` }, 402);
+        const fromMonthly = Math.min(m.price, monthlyLeft(w)), fromPaid = m.price - fromMonthly;
+        w.used += fromMonthly; w.paid -= fromPaid;
+        const p = await db.prepare("SELECT body FROM profiles WHERE user_id=?").bind(u.id).first();
+        const at = iso(), stmts = [saveWallet(db, w), ledgerRow(db, u.id, "use", 0, -m.price, clip(b.model, 40))];
+        if (p) {
+          const prof = JSON.parse(p.body);
+          const next = { ...prof, ...joelFields(w), history: [{ at, text: `JoelAI Pro · ${m.name}`, amount: 0, tokens: 0, joelTokens: -m.price }, ...(Array.isArray(prof.history) ? prof.history : [])].slice(0, 60) };
+          stmts.push(db.prepare("UPDATE profiles SET body=?, updated_at=? WHERE user_id=?").bind(JSON.stringify(next), at, u.id));
+        }
+        await db.batch(stmts);
+        return reply(req, { ok: true, charged: m.price, ...walletView(w) });
       }
       // The model server (Vercel) reports what a finished answer used. Needs the shared secret, so a browser cannot call it.
       if (path === "/api/joel/charge" && req.method === "POST") {
