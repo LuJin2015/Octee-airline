@@ -4,6 +4,7 @@ import { fetchPublished } from "./published.js";
 import { codeHash, normalizeCode } from "./crypto.js";
 import { today } from "./dom.js";
 import { load, save } from "./store.js";
+import { proFree } from "./perks.js";
 import { grantsFor, requestPermission } from "./permissions.js";
 
 export const TIERS = [
@@ -71,11 +72,23 @@ export const joelTokensOf = (u) => {
 export function buyJoelPro() {
   return updateUser((u) => {
     if (u.joelPro) return false;
-    spendTokens(u, JOEL_PRO_PRICE, "Unlocked JoelAI Pro");
+    if (proFree(u)) u.history.unshift({ at: new Date().toISOString(), text: "Unlocked JoelAI Pro (free for this account)", amount: 0, tokens: 0 });
+    else spendTokens(u, JOEL_PRO_PRICE, "Unlocked JoelAI Pro");
     u.joelPro = true;
     u.joelPaidTokens = paidJoelTokensOf(u);
     u.joelMonthlyUsage = { month: joelUsageMonth(), usedTokens: 0 };
     u.joelTokens = joelTokensOf(u);
+    return true;
+  });
+}
+export const GULLET_PRO_PRICE = 100;
+// GulletAI Pro: unlocks Smart mode (TinyLlama in the browser). Free where the Control Tower says so.
+export function buyGulletPro() {
+  return updateUser((u) => {
+    if (u.gulletPro) return false;
+    if (proFree(u)) u.history.unshift({ at: new Date().toISOString(), text: "Unlocked GulletAI Pro (free for this account)", amount: 0, tokens: 0 });
+    else spendTokens(u, GULLET_PRO_PRICE, "Unlocked GulletAI Pro");
+    u.gulletPro = true;
     return true;
   });
 }

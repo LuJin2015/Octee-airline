@@ -5,6 +5,7 @@
 // or says something unusable, the rulebook answer is used instead, so GulletAI always answers.
 import { load, save } from "./store.js";
 import { CONFIG } from "./config.js";
+import { currentUser } from "./auth.js";
 
 const KEY = "octee.gullet.smart";   // "on" once the visitor has agreed to the download
 export const SMART = {
@@ -80,8 +81,9 @@ export function tidy(raw) {
 }
 
 // Ask TinyLlama. `facts` is the handbook's own answer. Returns text, or null to fall back to the rulebook.
+export const gulletProOf = (u = currentUser()) => !!(u && u.gulletPro);
 export async function smartReply(question, facts, history = []) {
-  if (!smartReady()) return null;
+  if (!smartReady() || !gulletProOf()) return null;
   const messages = [{ role: "system", content: SYSTEM + (facts ? `\n\nFACTS (use these, do not contradict them):\n${String(facts).replace(/\s+/g, " ").slice(0, 900)}` : "") },
     ...history.slice(-4).map((m) => ({ role: m.who === "me" ? "user" : "assistant", content: String(m.text || "").slice(0, 240) })),
     { role: "user", content: String(question).slice(0, 300) }];

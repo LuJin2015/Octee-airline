@@ -126,8 +126,8 @@ function login(crew) {
 /* ----- inside ----- */
 async function tower(session, crew, notice = "") {
   const published = await fetchJson("data/codes.json", { codes: [] });
-  const publishedPerks = await fetchJson("data/perks.json", { unlimitedFujitech: {} });
-  const perksDraft = { unlimitedFujitech: { ...(publishedPerks.unlimitedFujitech || {}) } };
+  const publishedPerks = await fetchJson("data/perks.json", { unlimitedFujitech: {}, freePro: {} });
+  const perksDraft = { unlimitedFujitech: { ...(publishedPerks.unlimitedFujitech || {}) }, freePro: { ...(publishedPerks.freePro || {}) } };
   const publishedDiscounts = await fetchJson("data/flight-discounts.json", { discounts: [] });
   let codes = load(DRAFT_CODES, null) || published.codes || [];
   let discounts = load("octee.tower.discounts", null) || publishedDiscounts.discounts || [];
@@ -275,10 +275,13 @@ async function tower(session, crew, notice = "") {
     const pmsg = el("p", { class: "msg", "aria-live": "polite" });
     const on = el("input", { type: "checkbox", id: "perk-octee", checked: perksDraft.unlimitedFujitech.octee === true });
     on.addEventListener("change", () => { if (on.checked) perksDraft.unlimitedFujitech.octee = true; else delete perksDraft.unlimitedFujitech.octee; setMsg(pmsg, "Changed. Press Save to cloud to apply it.", "info"); });
+    const pro = el("input", { type: "checkbox", id: "perk-pro", checked: perksDraft.freePro.octee === true });
+    pro.addEventListener("change", () => { if (pro.checked) perksDraft.freePro.octee = true; else delete perksDraft.freePro.octee; setMsg(pmsg, "Changed. Press Save to cloud to apply it.", "info"); });
     return el("div", { class: "card", style: "margin-bottom:12px" },
-      el("h3", {}, "Unlimited Fujitech"),
+      el("h3", {}, "Account perks"),
       el("p", { class: "note" }, "When this is on, the Octee account books flights and cargo without spending Fujitech. The Fujitech it has earned is never reduced and still shows at the top of the site. Only this panel can change it."),
-      el("div", { class: "row" }, el("div", { class: "field" }, el("label", { for: "perk-octee" }, on, " Octee: unlimited Fujitech"))),
+      el("div", { class: "row" }, el("div", { class: "field" }, el("label", { for: "perk-octee" }, on, " Octee: unlimited Fujitech")),
+        el("div", { class: "field" }, el("label", { for: "perk-pro" }, pro, " Octee: JoelAI Pro and GulletAI Pro free"))),
       el("div", { class: "actions" },
         el("button", { class: "btn", type: "button", onclick: () => saveToCloud("perks", perksDraft, pmsg, "The setting") }, "Save to cloud"),
         el("button", { class: "btn small ghost", type: "button", onclick: () => download("perks.json", perksDraft) }, "Manual download: perks.json")),

@@ -177,7 +177,7 @@ export async function gulletAnswer(raw, st = {}) {
   // Smart mode (opt-in, TinyLlama in this browser): it answers in its own words using the handbook's answer as the facts.
   // Anything it cannot do, or is too slow for, falls back to the handbook answer below.
   const smart = await smartReply(t, r.text);
-  if (smart) return finish({ ...r, text: smart, smart: true, chips: (r.chips && r.chips.length ? r.chips : ["What can you do?", "Speak to a manager"]).slice(0, 4) });
+  if (smart) return finish({ ...r, text: smart, smart: true, handbook: r.text, chips: (r.chips && r.chips.length ? r.chips : ["What can you do?", "Speak to a manager"]).slice(0, 4) });
   const opener = pickRand(OPENERS).replace(/\.$/, "") + (name && st.n % 2 ? `, ${name}.` : ".");
   const closer = st.n % 2 ? pickRand(CLOSERS) : "";
   return finish({ ...r, text: opener + " " + r.text + (closer ? "\n\n" + closer : ""), chips: (r.chips && r.chips.length ? r.chips : ["What can you do?", "Speak to a manager"]).slice(0, 4) });

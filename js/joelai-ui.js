@@ -5,6 +5,7 @@ import { proConverse } from "./joelpro.js";
 import { actionRow, stopSpeaking } from "./chatextras.js";
 import { converse, GREETING, CHIPS, resetState, setPage } from "./joelbrain.js";
 import { currentUser } from "./auth.js";
+import { proFree } from "./perks.js";
 import { buyJoelPro, joelTokensOf, joelUsageMonth, JOEL_PRO_PRICE, JOEL_TOKEN_RATE, JOEL_MONTHLY_GRANT, JOEL_MIN_CALL_RESERVE } from "./miles.js";
 import { JOEL_MODELS, JOEL_MODEL_DEFAULT } from "./joel-models.js";
 import { modelStatus, hasLedger, unlockPro, buyJoelTokens, askModel, ModelError } from "./joelwallet.js";
@@ -68,17 +69,17 @@ export function mountJoelAI(box, idSuffix = "q") {
     }
     const ledger = hasLedger();
     if (!u.joelPro) {
-      const price = JOEL_PRO_PRICE, short = (u.tokens || 0) < price;
+      const free = proFree(u), price = free ? 0 : JOEL_PRO_PRICE, short = (u.tokens || 0) < price;
       const unlock = el("button", { class: "btn small secondary", type: "button", disabled: short, onclick: (e) => pending(e.target, async () => {
         if (ledger) await unlockPro(); else buyJoelPro();
         drawPro();
-      }) }, `Unlock JoelAI Pro · ${price} Octeetokens`);
+      }) }, free ? "Unlock JoelAI Pro · free for your account" : `Unlock JoelAI Pro · ${price} Octeetokens`);
       const controls = [
         el("div", { class: "jai-pro-copy" }, el("strong", {}, "JoelAI Pro"), " · Longer handbook answers built from the real timetable, a random page to explore, and questions to ask next. With a cloud account you also get a model and a monthly JoelToken allowance."),
-        el("p", { class: "note" }, `One-time unlock: ${price} Octeetokens. ` + (ledger ? "The cloud records it, so it follows you to every device." : "This account is not in the cloud, so Pro works as the handbook only.")),
+        el("p", { class: "note" }, free ? "JoelAI Pro is free for this account. " : `One-time unlock: ${price} Octeetokens. ` + (ledger ? "The cloud records it, so it follows you to every device." : "This account is not in the cloud, so Pro works as the handbook only.")),
         unlock
       ];
-      if (short) controls.push(el("p", { class: "hint" }, `You have ${fmtMiles(u.tokens || 0)} Octeetokens. Get more on the `, el("a", { href: "octmiles.html#tokens" }, "Octmiles page"), "."));
+      if (short && !free) controls.push(el("p", { class: "hint" }, `You have ${fmtMiles(u.tokens || 0)} Octeetokens. Get more on the `, el("a", { href: "octmiles.html#tokens" }, "Octmiles page"), "."));
       if (!ledger) controls.push(el("p", { class: "hint" }, "Want the model too? ", el("a", { href: "login.html?next=" + encodeURIComponent(here) }, "Log in with a cloud account"), " first."));
       proBox.replaceChildren(...controls);
       return;

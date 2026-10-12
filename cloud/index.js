@@ -166,7 +166,13 @@ export default {
         if (buying && !(count >= 1 && count <= JOEL.maxBuy)) return reply(req, { error: "bad_count", message: `Choose 1 to ${JOEL.maxBuy} Octeetokens.` }, 400);
         if (buying && !w.pro) return reply(req, { error: "not_pro", message: "Unlock JoelAI Pro first." }, 409);
         if (!buying && w.pro) return reply(req, { error: "already", message: "JoelAI Pro is already unlocked." }, 409);
-        const cost = buying ? count : JOEL.price;
+        let free = false;
+        if (!buying) {
+          const pr = await db.prepare("SELECT body FROM published WHERE name='perks'").first().catch(() => null);
+          let pj = null; try { pj = pr ? JSON.parse(pr.body) : null; } catch { pj = null; }
+          free = pj ? !!(pj.freePro && pj.freePro[u.username.toLowerCase()] === true) : isCloudOwner; // no saved setting yet: the cloud owner gets it
+        }
+        const cost = buying ? count : free ? 0 : JOEL.price;
         const p = await db.prepare("SELECT body, updated_at FROM profiles WHERE user_id=?").bind(u.id).first();
         if (!p) return reply(req, { error: "no_profile", message: "Your account has not been saved to the cloud yet. Try again in a moment." }, 409);
         const prof = JSON.parse(p.body), have = Math.max(0, Math.floor(Number(prof.tokens) || 0));
