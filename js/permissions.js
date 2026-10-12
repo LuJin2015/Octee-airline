@@ -4,6 +4,7 @@
 //  * grants:   how many extra uses each username has been given. A grant made in this browser works here at once.
 //    For other devices the administration downloads data/permissions.json and it is committed to the repository.
 import { load, save } from "./store.js";
+import { fetchPublished } from "./published.js";
 
 const REQUESTS = "octee.tower.requests";
 const GRANTS = "octee.tower.grants";
@@ -12,8 +13,7 @@ const key = (name) => String(name || "").toLowerCase();
 let published = null;
 export function publishedGrants() {
   if (!published) {
-    published = fetch("data/permissions.json", { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : {}))
+    published = fetchPublished("permissions", "data/permissions.json", {})
       .then((j) => (j && typeof j.crew === "object" && j.crew ? j.crew : {}))
       .catch(() => ({}));
   }

@@ -1,5 +1,6 @@
 // Octmiles: tiers, rewards, history and the "Have a code?" box. All in this browser.
 import { currentUser, updateUser } from "./auth.js";
+import { fetchPublished } from "./published.js";
 import { codeHash, normalizeCode } from "./crypto.js";
 import { today } from "./dom.js";
 import { load, save } from "./store.js";
@@ -203,9 +204,8 @@ export const CODE_MESSAGES = {
 let codesCache = null;
 export async function loadCodes() {
   if (codesCache) return codesCache;
-  const res = await fetch("data/codes.json", { cache: "no-store" });
-  if (!res.ok) throw new Error("offline");
-  const json = await res.json();
+  const json = await fetchPublished("codes", "data/codes.json", null);
+  if (!json) throw new Error("offline");
   codesCache = Array.isArray(json.codes) ? json.codes : [];
   return codesCache;
 }

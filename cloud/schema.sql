@@ -68,3 +68,10 @@ CREATE TABLE IF NOT EXISTS cloud_admins (
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (granted_by) REFERENCES users(id)
 );
+
+CREATE TABLE IF NOT EXISTS published (
+  name TEXT PRIMARY KEY,
+  body TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  updated_by TEXT NOT NULL DEFAULT ''
+);

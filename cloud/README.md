@@ -27,3 +27,9 @@ A small Cloudflare Worker + D1 database. It stores a login and ONE saved JSON pr
 - Flight discount codes are created in the static Control Tower and downloaded as `data/flight-discounts.json`; commit/push that file to publish. The file contains hashes, not the redeemable plain codes. Each code may specify percent off, destination, cabin and expiry.
 - Passenger fare rules in this prototype: base 0.055 Fujitech per route mile, multiplied by cabin (Economy 1×, Business 1.5×, First 2×, Scraggy Class 2.5×); Platinum Wing uses 1×. Cargo uses 2.0 Fujitech handling plus 5.5 Fujitech per 50 route-miles per 10 kg. Exchange batches are 50 Octmiles → 5.5 Fujitech.
 - The browser-side profile remains the source of balances; this Worker admin feature secures role checks, but fare balances are not server-ledgered. Do not treat Fujitech as real money.
+
+## Control Tower saves to the cloud
+
+- Table `published` holds the files the Control Tower used to download: `codes`, `accounts`, `permissions`, `control-tower` (the crew) and `flight-discounts`. `GET /api/data/<name>` is public; `PUT` needs a cloud login that is the Control Tower owner or an admin (the same role check as `/api/admin/*`).
+- The site reads the cloud copy first and falls back to the file in `data/` (`js/published.js`), and the Worker's etched-account list does the same. Every Tower panel keeps a "Manual download" button for when the cloud has a problem.
+- Run the new `published` table from `schema.sql`, then redeploy the Worker.

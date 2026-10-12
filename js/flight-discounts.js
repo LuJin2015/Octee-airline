@@ -1,11 +1,11 @@
 import { codeHash, normalizeCode } from "./crypto.js";
+import { fetchPublished } from "./published.js";
 
 let cache = null;
 export async function loadFlightDiscounts() {
   if (cache) return cache;
-  const r = await fetch("data/flight-discounts.json", { cache: "no-store" });
-  if (!r.ok) throw new Error("The discount code list is delayed.");
-  const j = await r.json();
+  const j = await fetchPublished("flight-discounts", "data/flight-discounts.json", null);
+  if (!j) throw new Error("The discount code list is delayed.");
   cache = Array.isArray(j.discounts) ? j.discounts.filter((x) => x && x.hash) : [];
   return cache;
 }

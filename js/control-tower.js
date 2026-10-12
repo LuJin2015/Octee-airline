@@ -4,13 +4,15 @@
 // This is a STATIC site, so there is no server to keep secrets or save codes. Instead:
 //  * Who may enter is in data/control-tower.json (owner + admins, passwords stored only as PBKDF2 hashes).
 //  * Codes live in data/codes.json, stored only as SHA-256 hashes (reading the file doesn't reveal them).
-//  * The Control Tower builds the NEW versions of those files for you to download and commit to GitHub.
-//    The real lock is GitHub itself: only people who can push to the repo can publish codes or admins.
+//  * The Control Tower saves the NEW versions of those files to Octee Cloud ("Save to cloud"): live at once, no push needed.
+//    Only a cloud account that is a Control Tower owner or admin (checked by the Worker) can save. Readers fall back to the
+//    files in data/, and every panel keeps a "Manual download" so the files can still be committed to GitHub if the cloud is down.
 import { el, setMsg } from "./dom.js";
 import { hashPassword, randomSalt, codeHash, normalizeCode } from "./crypto.js";
 import { loadSession, saveSession, removeSession, load, save, remove } from "./store.js";
 import { pendingRequests, allGrants, grant, dismissRequest } from "./permissions.js";
-import { cloudAdminCall } from "./cloud.js";
+import { cloudAdminCall, cloudState } from "./cloud.js";
+import { fetchPublished, publishToCloud, isPublisher } from "./published.js";
 
 const SESSION = "octee.tower.session";
 const DRAFT_CODES = "octee.tower.codes";
@@ -19,8 +21,14 @@ const LOCK = "octee.tower.lock";
 
 let back = null;
 
-async function fetchJson(path, fallback) {
-  try { const r = await fetch(path, { cache: "no-store" }); return r.ok ? await r.json() : fallback; } catch { return fallback; }
+// The cloud copy if there is one, else the file in data/.
+const fetchJson = (path, fallback) => fetchPublished(path.replace(/^data\//, "").replace(/\.json$/, ""), path, fallback);
+// Save a file to the cloud and say how it went.
+async function saveToCloud(name, data, msg, what) {
+  setMsg(msg, "Saving to the cloud…", "info");
+  const r = await publishToCloud(name, data);
+  setMsg(msg, r.ok ? `${what} saved to the cloud. It is live now, on every device.` : r.message, r.ok ? "ok" : "error");
+  return r.ok;
 }
 
 function download(filename, data) {
@@ -65,7 +73,7 @@ function setupOwner() {
   const msg = el("p", { class: "msg", "aria-live": "polite" });
   const form = el("form", { class: "card" },
     el("h3", {}, "Initial setup"),
-    el("p", {}, "No administrator account exists yet. Create the owner account with a strong password. You will download ", el("code", {}, "control-tower.json"), " and put it in the ", el("code", {}, "data/"), " folder of the website, then commit and push."),
+    el("p", {}, "No administrator account exists yet. Create the owner account with a strong password. After creating it, open the Admins tab and press Save to cloud. A copy is also downloaded as a backup."),
     el("div", { class: "row" },
       el("div", { class: "field" }, el("label", { for: "ct-name" }, "Owner name"), el("input", { type: "text", id: "ct-name", maxlength: "30", autocomplete: "username" })),
       el("div", { class: "field" }, el("label", { for: "ct-pass" }, "Password (12+ characters)"), el("input", { type: "password", id: "ct-pass", autocomplete: "new-password" }))),
@@ -80,7 +88,7 @@ function setupOwner() {
     save(DRAFT_CREW, crew);
     download("control-tower.json", crew);
     saveSession(SESSION, { name, role: "owner" });
-    tower({ name, role: "owner" }, crew, "control-tower.json downloaded. Place it in the website's data/ folder, then commit and push.");
+    tower({ name, role: "owner" }, crew, "Owner created. Open the Admins tab and press Save to cloud to make it live (a backup control-tower.json was downloaded).");
   });
   shell(form);
 }
@@ -132,6 +140,15 @@ async function tower(session, crew, notice = "") {
   const publishedAccounts = (await fetchJson("data/accounts.json", { accounts: [] })).accounts || [];
   const removed = new Set();
   const body = el("div");
+  // Saving to the cloud needs a cloud login that is a Control Tower owner or admin (the Worker checks it).
+  const cloudBar = el("div", { class: "card", style: "margin-bottom:12px" }, el("p", { class: "note" }, "Checking the cloud…"));
+  (async () => {
+    const who = (cloudState() || {}).name, ok = await isPublisher();
+    cloudBar.replaceChildren(el("p", { class: ok ? "note" : "msg info" }, ok ? `Cloud: signed in as ${who}. This account may save to the cloud.`
+      : ok === false ? `Cloud: signed in as ${who}, but this account is not a Control Tower admin, so Save to cloud will be refused. The owner can add it on the Cloud accounts tab.`
+      : who ? "The cloud could not be reached, so Save to cloud will not work right now. Manual download still does."
+      : "Not logged in to Octee Cloud. To save to the cloud, log in on the login page (Log in tab) with a Control Tower admin account, then open this panel again."));
+  })();
   const top = el("p", { class: "msg ok" }, notice);
   const show = (which) => {
     tabCodes.setAttribute("aria-selected", String(which === "codes"));
@@ -155,6 +172,7 @@ async function tower(session, crew, notice = "") {
   const saveCodes = (next) => { codes = next; save(DRAFT_CODES, codes); show("codes"); };
 
   function discountsPanel() {
+    const dmsg = el("p", { class: "msg", "aria-live": "polite" });
     const msg = el("p", { class: "msg", role: "status" });
     const form = el("form", { class: "card" }, el("h3", {}, "Create a flight discount"),
       el("div", { class: "row" },
@@ -176,8 +194,11 @@ async function tower(session, crew, notice = "") {
     return el("div", {}, form, el("div", { class: "card" }, el("h3", {}, `Discounts (${discounts.length})`),
       el("p", {}, discounts.map((d) => `${d.note || "Discount"}: ${d.percent}%${d.to ? ` to ${d.to}` : ""}${d.classId ? ` · ${d.classId}` : ""}`).join(" · ") || "No discounts yet."),
       el("p", { class: "note" }, JSON.stringify(discounts) === JSON.stringify(publishedDiscounts.discounts || []) ? "Matches published flight-discounts.json." : "There are unpublished changes."),
-      el("div", { class: "actions" }, el("button", { class: "btn", type: "button", onclick: () => download("flight-discounts.json", { discounts }) }, "Download flight-discounts.json")),
-      el("p", { class: "hint" }, "Put the downloaded file in data/ and commit it to publish. A 100% First Class discount to FIA makes a free first class flight.")));
+      el("div", { class: "actions" },
+        el("button", { class: "btn", type: "button", onclick: async () => { if (await saveToCloud("flight-discounts", { discounts }, dmsg, "Flight discounts")) publishedDiscounts.discounts = discounts; } }, "Save to cloud"),
+        el("button", { class: "btn small ghost", type: "button", onclick: () => download("flight-discounts.json", { discounts }) }, "Manual download: flight-discounts.json")),
+      dmsg,
+      el("p", { class: "hint" }, "Save to cloud publishes the discounts at once. Manual download is only for when the cloud has a problem: put the file in data/ and commit it. A 100% First Class discount to FIA makes a free first class flight.")));
   }
 
   async function cloudPanel() {
@@ -220,9 +241,10 @@ async function tower(session, crew, notice = "") {
       if (codes.some((c) => c.hash === hash)) return setMsg(msg, "That code already exists.", "error");
       saveCodes([...codes, { hash, octmiles: miles, expires: form.querySelector("#nc-exp").value || null, active: true,
         note: form.querySelector("#nc-note").value.trim() || null, madeBy: session.name, made: new Date().toISOString().slice(0, 10) }]);
-      body.prepend(el("p", { class: "msg ok" }, `Code ${code} created (${miles} Octmiles). Record it now: only a hash is stored, so it cannot be displayed again. Download codes.json and commit it to publish the code.`));
+      body.prepend(el("p", { class: "msg ok" }, `Code ${code} created (${miles} Octmiles). Record it now: only a hash is stored, so it cannot be displayed again. Press Save to cloud to publish the code.`));
     });
     const changed = JSON.stringify(codes) !== JSON.stringify(published.codes || []);
+    const cmsg = el("p", { class: "msg", "aria-live": "polite" });
     return el("div", {},
       form,
       el("div", { class: "card", style: "margin-top:12px" },
@@ -235,11 +257,13 @@ async function tower(session, crew, notice = "") {
             el("td", {}, el("input", { type: "checkbox", checked: c.active !== false, "aria-label": "Code switched on",
               onchange: (e) => saveCodes(codes.map((x, k) => (k === i ? { ...x, active: e.target.checked } : x))) })),
             el("td", {}, el("button", { class: "btn small ghost danger", type: "button", onclick: () => saveCodes(codes.filter((_, k) => k !== i)) }, "Delete"))))))) : el("p", { class: "note" }, "No codes yet."),
-        el("p", { class: changed ? "msg info" : "note" }, changed ? "There are unpublished changes." : "Matches the published data/codes.json."),
+        el("p", { class: changed ? "msg info" : "note" }, changed ? "There are unpublished changes." : "Matches the published codes."),
         el("div", { class: "actions" },
-          el("button", { class: "btn", type: "button", onclick: () => download("codes.json", { codes }) }, "Download codes.json"),
+          el("button", { class: "btn", type: "button", onclick: async () => { if (await saveToCloud("codes", { codes }, cmsg, "Codes")) { published.codes = codes; remove(DRAFT_CODES); } } }, "Save to cloud"),
+          el("button", { class: "btn small ghost", type: "button", onclick: () => download("codes.json", { codes }) }, "Manual download: codes.json"),
           el("button", { class: "btn small ghost", type: "button", onclick: () => { remove(DRAFT_CODES); codes = published.codes || []; show("codes"); } }, "Discard changes")),
-        el("p", { class: "hint" }, "To publish: put the downloaded codes.json in the website's data/ folder (replace the old one), commit and push. GitHub Pages updates in about a minute, then the codes work on every device.")));
+        cmsg,
+        el("p", { class: "hint" }, "Save to cloud publishes the codes at once, on every device. Manual download is only for when the cloud has a problem: put the file in the website's data/ folder, commit and push.")));
   }
 
   // Accounts "etched in the code": data/accounts.json. An account in that file can log in on any device and
@@ -286,18 +310,24 @@ async function tower(session, crew, notice = "") {
     return el("div", {},
       el("div", { class: "card" },
         el("h3", {}, `Accounts (${keys.length})`),
-        el("p", { class: "note" }, "An account saved to data/accounts.json can sign in on any device and receives the balances and trips recorded at the time of saving. Tick the accounts to save from this browser, then download the file."),
+        el("p", { class: "note" }, "An account saved to the cloud can sign in on any device and receives the balances and trips recorded at the time of saving. Tick the accounts to save from this browser, then press Save to cloud."),
         keys.length ? el("div", { class: "table-wrap" }, el("table", { class: "plain" },
           el("thead", {}, el("tr", {}, ["Save", "Username", "Octmiles", "Octeetokens", "Trips", "Status", ""].map((h) => el("th", {}, h)))),
           el("tbody", {}, rows))) : el("p", { class: "note" }, "No accounts in this browser or in the file."),
-        el("p", { class: "msg info" }, "Notice: data/accounts.json is public in the repository. It contains usernames, password hashes, balances and trips, including passenger names. Save only accounts whose owners agree, and only with passwords that are not used anywhere else."),
-        el("div", { class: "actions" }, el("button", { class: "btn", type: "button", onclick: () => {
-          if (!picked.size && !removed.size) return setMsg(msg, "Tick at least one account, or remove one from the file.", "error");
-          download("accounts.json", build());
-          setMsg(msg, "accounts.json downloaded. Place it in the website's data/ folder, then commit and push.", "ok");
-        } }, "Download accounts.json")),
+        el("p", { class: "msg info" }, "Notice: the published accounts list is public (anyone can read it). It contains usernames, password hashes, balances and trips, including passenger names. Save only accounts whose owners agree, and only with passwords that are not used anywhere else."),
+        el("div", { class: "actions" },
+          el("button", { class: "btn", type: "button", onclick: async () => {
+            if (!picked.size && !removed.size) return setMsg(msg, "Tick at least one account, or remove one from the file.", "error");
+            const out = build();
+            if (await saveToCloud("accounts", out, msg, "Accounts")) { publishedAccounts.splice(0, publishedAccounts.length, ...out.accounts); removed.clear(); picked.clear(); show("accounts"); body.prepend(el("p", { class: "msg ok" }, "Accounts saved to the cloud. They are live now.")); }
+          } }, "Save to cloud"),
+          el("button", { class: "btn small ghost", type: "button", onclick: () => {
+            if (!picked.size && !removed.size) return setMsg(msg, "Tick at least one account, or remove one from the file.", "error");
+            download("accounts.json", build());
+            setMsg(msg, "accounts.json downloaded. Only needed if the cloud has a problem: place it in the website's data/ folder, then commit and push.", "ok");
+          } }, "Manual download: accounts.json")),
         msg,
-        el("p", { class: "hint" }, "To publish: replace data/accounts.json with the downloaded file, commit and push. Balances earned on a device after saving stay on that device until the account is saved again here; when the file holds a newer copy, the file replaces the device copy at the next sign-in.")));
+        el("p", { class: "hint" }, "Save to cloud publishes the list at once. Balances earned on a device after saving stay on that device until the account is saved again here; when the file holds a newer copy, the file replaces the device copy at the next sign-in.")));
   }
 
   // Permission requests. A passenger who has used the crew code beyond its free uses is stopped and a request
@@ -321,6 +351,7 @@ async function tower(session, crew, notice = "") {
       await give(name);
     });
     const names = Object.keys(grants).sort();
+    const pmsg = el("p", { class: "msg", "aria-live": "polite" });
     return el("div", {},
       el("div", { class: "card" },
         el("h3", {}, `Pending requests (${reqs.length})`),
@@ -336,11 +367,15 @@ async function tower(session, crew, notice = "") {
         el("h3", {}, "Permissions given"),
         names.length ? el("table", { class: "plain" }, el("thead", {}, el("tr", {}, el("th", {}, "Username"), el("th", {}, "Extra uses allowed"))),
           el("tbody", {}, names.map((n) => el("tr", {}, el("td", {}, n), el("td", {}, String(grants[n])))))) : el("p", { class: "note" }, "None yet."),
-        el("div", { class: "actions" }, el("button", { class: "btn", type: "button", onclick: () => download("permissions.json", { crew: grants }) }, "Download permissions.json")),
-        el("p", { class: "hint" }, "Requests are recorded in the browser where they are made; there is no server to deliver them. To make permissions work on other devices: replace data/permissions.json with the downloaded file, commit and push.")));
+        el("div", { class: "actions" },
+          el("button", { class: "btn", type: "button", onclick: () => saveToCloud("permissions", { crew: grants }, pmsg, "Permissions") }, "Save to cloud"),
+          el("button", { class: "btn small ghost", type: "button", onclick: () => download("permissions.json", { crew: grants }) }, "Manual download: permissions.json")),
+        pmsg,
+        el("p", { class: "hint" }, "Requests are recorded in the browser where they are made. Press Save to cloud to make the permissions given here work on other devices at once. Manual download is only for when the cloud has a problem.")));
   }
 
   function crewPanel() {
+    const kmsg = el("p", { class: "msg", "aria-live": "polite" });
     const msg = el("p", { class: "msg", "aria-live": "polite" });
     const form = el("form", { class: "card" },
       el("h3", {}, "Add an admin"),
@@ -369,8 +404,11 @@ async function tower(session, crew, notice = "") {
               crew = { ...crew, admins: crew.admins.filter((_, k) => k !== i) }; save(DRAFT_CREW, crew); body.replaceChildren(crewPanel());
             } }, "Remove"))))))),
       form,
-      el("div", { class: "actions" }, el("button", { class: "btn", type: "button", onclick: () => download("control-tower.json", crew) }, "Download control-tower.json")),
-      el("p", { class: "hint" }, "To publish: replace data/control-tower.json with the downloaded file, commit and push."));
+      el("div", { class: "actions" },
+        el("button", { class: "btn", type: "button", onclick: () => saveToCloud("control-tower", crew, kmsg, "The crew") }, "Save to cloud"),
+        el("button", { class: "btn small ghost", type: "button", onclick: () => download("control-tower.json", crew) }, "Manual download: control-tower.json")),
+      kmsg,
+      el("p", { class: "hint" }, "Save to cloud makes the crew list live at once. Manual download is only for when the cloud has a problem: replace data/control-tower.json, commit and push."));
   }
 
   shell(
@@ -378,8 +416,9 @@ async function tower(session, crew, notice = "") {
     el("p", { class: "fag-who" }, `Signed in as ${session.name} `, el("span", { class: "tag" }, session.role),
       " ", el("button", { class: "btn small ghost", type: "button", onclick: () => { removeSession(SESSION); back.remove(); } }, "Sign out")),
     el("div", { class: "tabs", role: "tablist" }, tabCodes, tabDiscounts, tabAccounts, tabCloud, tabRequests, tabCrew),
+    cloudBar,
     body,
-    el("p", { class: "hint" }, session.cloud ? "Cloud admin role changes take effect immediately. Flight discounts are published when their downloaded file is committed to the repository." : "This system prepares files. Changes take effect for other users when the files are committed to the repository."));
+    el("p", { class: "hint" }, "Changes here are drafts in this browser until you press Save to cloud. Cloud admin role changes take effect immediately."));
   if (!notice) top.remove();
   show("codes");
 }

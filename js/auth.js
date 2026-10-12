@@ -5,6 +5,7 @@
 //    as they were when the file was last published.
 // Passwords are never stored: only a salted PBKDF2 hash.
 import { load, save, remove } from "./store.js";
+import { fetchPublished } from "./published.js";
 import { hashPassword, randomSalt } from "./crypto.js";
 import { CONFIG } from "./config.js";
 
@@ -35,8 +36,7 @@ const saveUsers = (u) => save(USERS, u);
 let etchedCache = null;
 export function etchedAccounts() {
   if (!etchedCache) {
-    etchedCache = fetch("data/accounts.json", { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : { accounts: [] }))
+    etchedCache = fetchPublished("accounts", "data/accounts.json", { accounts: [] })
       .then((j) => (Array.isArray(j.accounts) ? j.accounts.filter((a) => a && /^[A-Za-z0-9_ ]{3,20}$/.test(a.username || "") && a.salt && a.hash) : []))
       .catch(() => []);
   }

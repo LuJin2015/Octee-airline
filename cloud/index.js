@@ -31,12 +31,18 @@ let etchedMemo = { at: 0, list: [] };
 async function etchedList(env) {
   if (Date.now() - etchedMemo.at < 300000) return etchedMemo.list;
   try {
-    const r = await fetch(env.ETCHED_URL || ETCHED_URL, { cf: { cacheTtl: 60 } });
-    const j = r.ok ? await r.json() : null;
+    // the copy saved from the Control Tower comes first; the file on GitHub Pages is the fallback
+    const row = await env.DB.prepare("SELECT body FROM published WHERE name='accounts'").first().catch(() => null);
+    let j = null;
+    if (row) { try { j = JSON.parse(row.body); } catch { j = null; } }
+    if (!j) { const r = await fetch(env.ETCHED_URL || ETCHED_URL, { cf: { cacheTtl: 60 } }); j = r.ok ? await r.json() : null; }
     if (j && Array.isArray(j.accounts)) etchedMemo = { at: Date.now(), list: j.accounts.filter((a) => a && a.username && a.hash).map((a) => ({ key: String(a.username).toLowerCase(), name: String(a.username), hash: String(a.hash) })) };
   } catch { /* keep the old list */ }
   return etchedMemo.list;
 }
+// Files the Control Tower publishes (instead of downloading them and committing to GitHub). Anyone may read; only a Control Tower owner or admin may write.
+const DATA_NAMES = { codes: (d) => Array.isArray(d.codes), accounts: (d) => Array.isArray(d.accounts), permissions: (d) => d.crew && typeof d.crew === "object" && !Array.isArray(d.crew), "control-tower": (d) => "owner" in d && Array.isArray(d.admins), "flight-discounts": (d) => Array.isArray(d.discounts) };
+const MAX_DATA = 400 * 1024;
 const clip = (v, n) => String(v ?? "").slice(0, n);
 
 // ---- JoelAI Pro wallet: Pro flag, purchased JoelTokens, this month's use. Lives on the server only. ----
@@ -195,6 +201,28 @@ export default {
         }
         await db.batch(stmts);
         return reply(req, { ok: true, charged: fromMonthly + fromPaid, ...walletView(w) });
+      }
+      // ---- Control Tower: files published to the cloud (codes, accounts, permissions, crew, flight discounts) ----
+      if (path.startsWith("/api/data/")) {
+        const name = decodeURIComponent(path.slice(10));
+        if (!Object.hasOwn(DATA_NAMES, name)) return reply(req, { error: "not_found" }, 404);
+        if (req.method === "GET") {
+          const row = await db.prepare("SELECT body, updated_at, updated_by FROM published WHERE name=?").bind(name).first();
+          if (!row) return reply(req, { error: "not_found" }, 404);
+          return reply(req, { data: JSON.parse(row.body), updatedAt: row.updated_at, updatedBy: row.updated_by });
+        }
+        if (req.method === "PUT") {
+          if (!u) return reply(req, { error: "login" }, 401);
+          if (!(await adminRole())) return reply(req, { error: "not_publisher" }, 403);
+          const text = await req.text();
+          if (text.length > MAX_DATA) return reply(req, { error: "too_big" }, 413);
+          let b; try { b = JSON.parse(text); } catch { return reply(req, { error: "bad_json" }, 400); }
+          if (!b || typeof b.data !== "object" || b.data === null || Array.isArray(b.data) || !DATA_NAMES[name](b.data)) return reply(req, { error: "bad_data" }, 400);
+          const at = iso(), body = JSON.stringify(b.data);
+          await db.prepare("INSERT INTO published(name,body,updated_at,updated_by) VALUES(?,?,?,?) ON CONFLICT(name) DO UPDATE SET body=?, updated_at=?, updated_by=?").bind(name, body, at, u.username, body, at, u.username).run();
+          if (name === "accounts") etchedMemo = { at: 0, list: [] };
+          return reply(req, { ok: true, updatedAt: at });
+        }
       }
       // Reviews: everyone can read them; a cloud login writes one review each.
       if (req.method === "GET" && path === "/api/reviews") {
