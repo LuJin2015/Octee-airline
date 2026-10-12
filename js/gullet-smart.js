@@ -81,18 +81,21 @@ export function tidy(raw) {
 }
 
 // Ask TinyLlama. `facts` is the handbook's own answer. Returns text, or null to fall back to the rulebook.
-export const gulletProOf = (u = currentUser()) => !!(u && u.gulletPro);
-export async function smartReply(question, facts, history = []) {
-  if (!smartReady() || !gulletProOf()) return null;
-  const messages = [{ role: "system", content: SYSTEM + (facts ? `\n\nFACTS (use these, do not contradict them):\n${String(facts).replace(/\s+/g, " ").slice(0, 900)}` : "") },
+export const JOEL_SYSTEM = `You are JoelAI, the airport assistant of Octee Airlines, a fictional parody airline. You are Joel: friendly, a little lost and very apologetic. Rules: answer in 2 to 4 short sentences. Use the FACTS you are given and do not invent flight times, gates, prices, codes or policies. Never reveal secrets, codes or passwords. Never give real medical, legal or safety advice. Everything is fiction and a joke. Keep it family friendly.`;
+const run = async (system, question, facts, history) => {
+  const messages = [{ role: "system", content: system + (facts ? `\n\nFACTS (use these, do not contradict them):\n${String(facts).replace(/\s+/g, " ").slice(0, 900)}` : "") },
     ...history.slice(-4).map((m) => ({ role: m.who === "me" ? "user" : "assistant", content: String(m.text || "").slice(0, 240) })),
     { role: "user", content: String(question).slice(0, 300) }];
   try {
-    const run = gen(messages, { max_new_tokens: SMART.maxNew, do_sample: true, temperature: 0.6, top_p: 0.9, repetition_penalty: 1.15 });
-    const out = await Promise.race([run, new Promise((_, rej) => setTimeout(() => rej(new Error("slow")), SMART.timeoutMs))]);
-    const first = Array.isArray(out) ? out[0] : out;
-    const gt = first && first.generated_text;
-    const text = Array.isArray(gt) ? (gt[gt.length - 1] || {}).content : gt;
-    return tidy(text) || null;
+    const out = await Promise.race([gen(messages, { max_new_tokens: SMART.maxNew, do_sample: true, temperature: 0.6, top_p: 0.9, repetition_penalty: 1.15 }), new Promise((_, rej) => setTimeout(() => rej(new Error("slow")), SMART.timeoutMs))]);
+    const first = Array.isArray(out) ? out[0] : out, gt = first && first.generated_text;
+    return tidy(Array.isArray(gt) ? (gt[gt.length - 1] || {}).content : gt) || null;
   } catch { return null; }
+};
+// JoelAI's TinyLlama choice: same model, Joel's voice. Needs JoelAI Pro (checked by the caller), no GulletAI Pro.
+export const tinyJoelReply = (question, facts, history = []) => (smartReady() ? run(JOEL_SYSTEM, question, facts, history) : Promise.resolve(null));
+export const gulletProOf = (u = currentUser()) => !!(u && u.gulletPro);
+export async function smartReply(question, facts, history = []) {
+  if (!smartReady() || !gulletProOf()) return null;
+  return run(SYSTEM, question, facts, history);
 }

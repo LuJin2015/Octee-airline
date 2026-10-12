@@ -6,6 +6,7 @@ import { actionRow, stopSpeaking } from "./chatextras.js";
 import { converse, GREETING, CHIPS, resetState, setPage } from "./joelbrain.js";
 import { currentUser } from "./auth.js";
 import { proFree } from "./perks.js";
+import { smartState, onSmart, enableSmart, disableSmart, smartReady, smartSupport, tinyJoelReply } from "./gullet-smart.js";
 import { buyJoelPro, joelTokensOf, joelUsageMonth, JOEL_PRO_PRICE, JOEL_TOKEN_RATE, JOEL_MONTHLY_GRANT, JOEL_MIN_CALL_RESERVE } from "./miles.js";
 import { JOEL_MODELS, JOEL_MODEL_DEFAULT } from "./joel-models.js";
 import { modelStatus, hasLedger, unlockPro, buyJoelTokens, askModel, ModelError } from "./joelwallet.js";
@@ -52,6 +53,7 @@ export function mountJoelAI(box, idSuffix = "q") {
     el("span", { class: "jai-who" }, m.who === "bot" ? "JoelAI" : "You", m.mood && m.mood !== "calm" ? el("span", { class: "jai-mood" }, "feeling " + m.mood) : ""),
     ...String(m.text).split("\n\n").map((t) => el("p", {}, t)),
     m.usage ? el("p", { class: "jai-usage" }, `${m.usage.inputTokens.toLocaleString("en-GB")} input + ${m.usage.outputTokens.toLocaleString("en-GB")} output = ${m.usage.totalTokens.toLocaleString("en-GB")} tokens · ${m.modelName}`) : "",
+    m.handbook ? el("div", { class: "jai-handbook", style: "margin-top:8px;padding:8px 10px;border-left:3px solid var(--line,#ccc);background:rgba(0,0,0,.04);font-size:.92em" }, el("strong", {}, "From the handbook"), ...String(m.handbook).split("\n\n").map((t) => el("p", { style: "margin:4px 0" }, t))) : "",
     m.note ? el("p", { class: "jai-usage jai-note" }, m.note) : (m.via ? el("p", { class: "jai-usage" }, m.via) : ""),
     m.links?.length ? el("p", { class: "jai-links" }, m.links.map(([label, href]) => el("a", { class: "tag", href, ...(/^https?:/.test(href) ? { target: "_blank", rel: "noopener noreferrer" } : {}) }, label))) : "",
     m.who === "bot" && !m.error && history.indexOf(m) > 0 ? actionRow(m.text, { up: "Joel is glad. Joel is always glad. Joel is also sorry.", down: "Sorry! Joel will try again. Ask it another way and Joel will look in a different drawer." }) : "");
@@ -60,6 +62,27 @@ export function mountJoelAI(box, idSuffix = "q") {
 
   const problem = (msg) => { proBox.querySelector(".msg.error")?.remove(); proBox.append(el("p", { class: "msg error", role: "status" }, msg)); };
   const pending = async (btn, work) => { btn.disabled = true; try { await work(); } catch (e) { problem(e.message || "That did not work. Nothing was charged."); btn.disabled = false; } };
+
+  // Joel-TinyLlama: runs in this browser, so no model server, no cloud account and no JoelTokens are involved.
+  function drawLocal(model) {
+    const s = smartState();
+    const choices = el("select", { class: "jai-model-select", "aria-label": "JoelAI Pro model", onchange: (e) => { chosen = e.target.value; save(MODEL_KEY, chosen); drawPro(); } },
+      JOEL_MODELS.map((m) => el("option", { value: m.id, selected: m.id === model.id }, `${m.name} · ${m.detail}`)));
+    const btn = el("button", { class: "btn small secondary", type: "button", disabled: s.phase === "loading", onclick: () => {
+      if (s.phase === "ready") { disableSmart(); return; }
+      const sup = smartSupport();
+      if ((sup.mobile || sup.lowMemory) && !confirm("This downloads a large model and needs a lot of memory. This device may be slow or run out of memory. Turn it on anyway?")) return;
+      enableSmart();
+    } }, s.phase === "loading" ? "Downloading…" : s.phase === "ready" ? "Unload the model" : s.phase === "failed" ? "Try again" : "Download and turn on TinyLlama");
+    const note = s.phase === "off" || !s.note ? "TinyLlama-1.1B-Chat runs inside your browser: nothing is sent to a server and it costs no JoelTokens. The first time it downloads several hundred MB. It can be wrong, slow or strange, so the handbook answer is shown under each reply." : s.note + (s.phase === "failed" && s.error ? " (" + s.error + ")" : "");
+    proBox.replaceChildren(
+      el("div", { class: "jai-pro-row" }, el("strong", {}, "JoelAI Pro"), choices),
+      el("p", { class: "jai-answering" }, "Answering with: ", el("span", { class: "tag" }, s.phase === "ready" ? "Joel-TinyLlama · in your browser · free" : "Handbook Pro (TinyLlama is not running yet)")),
+      el("p", { class: "jai-status" + (s.phase === "failed" ? " warn" : s.phase === "ready" ? " ok" : "") }, note),
+      s.phase === "loading" ? el("progress", { max: "100", value: String(s.pct || 0), style: "width:100%", "aria-label": "Model download" }) : "",
+      el("p", { class: "actions" }, btn));
+  }
+  onSmart(() => { if (currentUser()?.joelPro && selectedModelObj().local) drawPro(); });
 
   function drawPro() {
     const u = currentUser();
@@ -86,6 +109,7 @@ export function mountJoelAI(box, idSuffix = "q") {
     }
 
     const model = selectedModelObj(), usingModel = !!model.model && modelReady();
+    if (model.local) { drawLocal(model); return; }
     const choices = el("select", { class: "jai-model-select", "aria-label": "JoelAI Pro model", onchange: (e) => { chosen = e.target.value; save(MODEL_KEY, chosen); drawPro(); } },
       JOEL_MODELS.map((m) => el("option", { value: m.id, selected: m.id === model.id }, `${m.name} · ${m.detail}`)));
 
@@ -143,7 +167,13 @@ export function mountJoelAI(box, idSuffix = "q") {
     const sel = selectedModelObj();
     const messages = history.filter((m) => m.who === "me" || m.who === "bot").slice(-4).map((m) => ({ role: m.who === "me" ? "user" : "assistant", content: String(m.text).slice(0, 300) }));
     try {
-      if (pro && sel.model && modelReady()) res = await proAnswer(sel, messages);
+      if (pro && sel.local) {
+        res = await proConverse(text);
+        const hb = res.text, tiny = smartReady() ? await tinyJoelReply(text, hb, history.slice(0, -1)) : null;
+        if (tiny) res = { ...res, text: tiny, handbook: hb, via: "Answered by Joel-TinyLlama in your browser. Nothing was charged." };
+        else res.via = smartReady() ? "TinyLlama could not answer that one, so Handbook JoelAI did." : "TinyLlama is not running yet, so Handbook JoelAI answered. Turn it on in the JoelAI Pro panel.";
+      }
+      else if (pro && sel.model && modelReady()) res = await proAnswer(sel, messages);
       else if (pro) {
         res = await proConverse(text);
         if (sel.model) res.via = `Answered by Handbook JoelAI · ${modelInfo.state === "checking" ? "the model server was still being checked" : "model unavailable here"}. Nothing was charged.`;
@@ -167,7 +197,7 @@ export function mountJoelAI(box, idSuffix = "q") {
         await new Promise((r) => setTimeout(r, 22));
       }
     }
-    history.push({ who: "bot", text: res.text, links: res.links, mood: res.mood, usage: res.usage, modelName: res.modelName, note: res.note, via: res.via });
+    history.push({ who: "bot", text: res.text, links: res.links, mood: res.mood, usage: res.usage, modelName: res.modelName, note: res.note, via: res.via, handbook: res.handbook });
     saveSession(KEY, history);
     draw();
     if (res.chips) drawChips(res.chips);
