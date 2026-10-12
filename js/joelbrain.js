@@ -3,7 +3,7 @@
 // from what we just talked about  4) pick the best answer (secrets are always refused first)  5) add mood, follow-up
 // buttons and, when lost, a "did you mean?" list.
 import { answer as baseAnswer, GREETING as BASE_GREETING, CHIPS as BASE_CHIPS } from "./joelai.js";
-import { routeAnswer, scanAnswer } from "./joelroute.js";
+import { routeAnswer, scanAnswer, planAnswer } from "./joelroute.js";
 import { KB, SMALL, RIDDLES, FACTS, story, pickRand } from "./joelkb.js";
 import { fun, handlePending, savedName } from "./joelfun.js";
 import { guideFun, timeGreeting } from "./joelguide.js";
@@ -165,6 +165,7 @@ async function one(q, state, u) {
     const m = await import("./joelmode.js"); m.setJoelMode(!off);
     return { text: off ? "Joel mode is off. Joel has put everything back. He is sorry. He is always sorry." : "Joel mode is on. Within a minute he will close something on this page, say sorry, and leave an Undo. Say \"turn off Joel mode\" or press Joel, stop.", links: [], chips: [off ? "Turn on Joel mode" : "Turn off Joel mode", "What is Joel mode?"] };
   }
+  { const pl = await planAnswer(q, state, u); if (pl) return pl; }
   { const rr = await routeAnswer(q, state); if (rr) return rr; }
   { const sc = await scanAnswer(q); if (sc) return sc; }
   { const g = guideFun(q, state, u) || fun(q, state, u) || world(q, state, u); if (g) return g; }

@@ -182,8 +182,23 @@ export function mountJoelAI(box, idSuffix = "q") {
       drawPro();
       return { ...r, via: (r.via ? r.via + " " : "") + `${sel.name}: ${price} JoelTokens charged.` };
     };
+    // Joel-2.2 and Joel-2.4: the same handbook answer, cut down to its first lines
+    const shorten = (r) => {
+      const paras = String(r.text || "").split("\n\n").filter(Boolean).slice(0, sel.paragraphs || 1);
+      let t = paras.join("\n\n");
+      // a sentence ends at . ! or ? followed by a space or the end (so 34.7 and ".)" do not split it)
+      const sentences = t.match(/[\s\S]+?(?:[.!?]+[)"'\u201d]*(?=\s|$)|$)/g) || [t];
+      t = sentences.slice(0, sel.sentences || 2).join("").trim();
+      const max = sel.chars || 200;
+      if (t.length > max) {
+        const head = t.slice(0, max), cut = Math.max(...[...head.matchAll(/[.!?][)"'\u201d]*(?=\s|$)/g)].map((m) => m.index + m[0].length), 0);
+        t = (cut > 20 ? head.slice(0, cut) : head.replace(/\s+\S*$/, "") + "…").trim();
+      }
+      return { ...r, text: t, links: (r.links || []).slice(0, sel.links || 1), via: `Answered by ${sel.name}: the handbook, short.` };
+    };
     try {
       if (!pro) res = await converse(text);
+      else if (sel.kind === "short") res = shorten(await converse(text));
       else if (sel.flat && joelTokensOf(currentUser()) < flatPrice(sel)) {
         res = await regular(`${sel.name} needs ${flatPrice(sel)} JoelTokens and you have ${fmtMiles(joelTokensOf(currentUser()))}. Joel-3.0 answered instead. Nothing was charged.`);
       } else if (sel.local) {
