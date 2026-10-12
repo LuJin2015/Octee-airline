@@ -1,6 +1,7 @@
 // Fujitech is Octee's pretend booking and cargo currency. Amounts are kept in tenths
 // so the 50 Octmiles = 5.5 Fujitech exchange stays exact without float drift.
 import { updateUser } from "./auth.js";
+import { fujitechUnlimited } from "./perks.js";
 
 export const FUJITECH_MILES_PER_EXCHANGE = 50;
 export const FUJITECH_TENTHS_PER_EXCHANGE = 55;
@@ -24,8 +25,15 @@ export function exchangeOctmilesForFujitech(batches = 1) {
   });
 }
 
+// What is still missing for this price. Always 0 when the Control Tower has switched unlimited Fujitech on for this account.
+export const fujitechShortOf = (u, tenths) => (fujitechUnlimited(u) ? 0 : Math.max(0, Math.ceil(Number(tenths) || 0) - fujitechTenthsOf(u)));
+
 export function spendFujitech(u, tenths, text) {
   tenths = Math.max(0, Math.ceil(Number(tenths) || 0));
+  if (fujitechUnlimited(u)) {   // unlimited: the earned balance is left exactly as it is
+    if (tenths) u.history.unshift({ at: new Date().toISOString(), text: `${text} (unlimited Fujitech: nothing deducted)`, fujitechTenths: 0 });
+    return;
+  }
   const balance = fujitechTenthsOf(u);
   if (balance < tenths) throw new Error(`You need ${fmtFujitech(tenths - balance)} more. Exchange Octmiles on the Octmiles page.`);
   u.fujitechTenths = balance - tenths;

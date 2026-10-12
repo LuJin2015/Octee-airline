@@ -12,6 +12,11 @@ export const CONFIG = {
   // Vercel, or by `vercel dev`). To use the model from GitHub Pages, put the Vercel address here, e.g. "https://octee.vercel.app".
   JOELAI_API_URL: "",
 
+  // GulletAI Smart mode (js/gullet-smart.js): TinyLlama running in the visitor's browser, opt-in. Leave GULLET_LIB empty to use the
+  // pinned transformers.js on jsDelivr; the model files come from Hugging Face.
+  GULLET_MODEL: "Xenova/TinyLlama-1.1B-Chat-v1.0",
+  GULLET_LIB: "",
+
   // Side clock
   FIA_TIMEZONE: "Asia/Singapore",   // Fuji International Airport
   SIA_TIMEZONE: "Asia/Singapore",   // Scraggy International Airport (same as the Scraggy project)

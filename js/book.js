@@ -6,7 +6,8 @@ import { $, el, setMsg, niceDate, today } from "./dom.js";
 import { loadSession, saveSession, removeSession } from "./store.js";
 import { currentUser, updateUser } from "./auth.js";
 import { addMiles, addScraggymiles, tierFor } from "./miles.js";
-import { fujitechTenthsOf, fmtFujitech, passengerFareTenths, spendFujitech } from "./fujitech.js";
+import { fujitechTenthsOf, fmtFujitech, passengerFareTenths, spendFujitech, fujitechShortOf } from "./fujitech.js";
+import { fujitechUnlimited } from "./perks.js";
 import { checkFlightDiscount } from "./flight-discounts.js";
 import { allTripsInBrowser } from "./auth.js";
 import { openRangeCalendar } from "./calendar.js";
@@ -349,7 +350,7 @@ function stepReview() {
   const o = out(), b = back();
   const miles = (o ? itineraryMiles(o, state.travelClass) : 0) + (b ? itineraryMiles(b, state.travelClass) : 0);
   const baseFare = baseFareTenths(), discount = discountTenths(), discountApplied = checkedDiscount(), fare = Math.max(0, baseFare - discount);
-  const short = u ? Math.max(0, fare - fujitechTenthsOf(u)) : 0;
+  const short = u ? fujitechShortOf(u, fare) : 0;
   const confirm = el("button", { class: "btn", type: "button", id: "confirm", disabled: all.length > 0 || !u || short > 0 }, formCount() > 1 ? `Confirm all forms · ${fmtFujitech(fare)}` : `Confirm · ${fmtFujitech(fare)}`);
   confirm.addEventListener("click", doConfirm);
   const why = all.length ? `Finish ${[...new Set(all.map((x) => stepLabel(x.id)))].join(", ")} first.` : !u ? "Log in to confirm and earn Octmiles." : short ? `You need ${fmtFujitech(short)} more. Exchange Octmiles on the Octmiles page.` : "";
@@ -378,7 +379,7 @@ function stepReview() {
       el("dt", {}, "Octmiles"), el("dd", {}, `+${miles.toLocaleString("en-GB")} (Octee flights; One United earns half)`),
       needsSA() ? [el("dt", {}, "Scraggymiles"), el("dd", {}, `+${saLegs().reduce((n, x) => n + scraggyMilesFor(x), 0).toLocaleString("en-GB")} (Scraggy Airlines flights; 1 Scraggymile = 2 Octmiles)`)] : "",
       el("dt", {}, "Fare"), el("dd", {}, discountApplied ? [el("s", {}, fmtFujitech(baseFare)), " ", el("strong", {}, fmtFujitech(fare)), ` (${discountApplied.percent}% off)`] : fmtFujitech(fare)),
-      el("dt", {}, "Fujitech balance"), el("dd", {}, u ? fmtFujitech(fujitechTenthsOf(u)) : "Log in to see your balance")),
+      el("dt", {}, "Fujitech balance"), el("dd", {}, u ? fmtFujitech(fujitechTenthsOf(u)) + (fujitechUnlimited(u) ? " · unlimited is on, nothing is deducted" : "") : "Log in to see your balance")),
     promoForm,
     all.length ? el("div", { class: "msg error missing" }, el("p", { style: "margin:0 0 4px" }, "Still missing:"),
       el("ul", {}, all.map((x) => el("li", {}, el("a", { href: "#", onclick: (e) => { e.preventDefault(); go(steps().indexOf(x.id)); } }, stepLabel(x.id)), ": ", x.p)))) : "",
@@ -428,6 +429,8 @@ function render() {
   renderNav();
   if (focusId) document.getElementById(focusId)?.focus();
 }
+
+window.addEventListener("octee:perks", () => { if (steps()[current] === "review") render(); });
 
 function go(i) {
   const ids = steps();

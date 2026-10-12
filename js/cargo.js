@@ -2,6 +2,7 @@ import { $, el, setMsg, fmtMiles } from "./dom.js";
 import { currentUser, requireLogin, updateUser } from "./auth.js";
 import { PLACES, placeName, RATES } from "./destinations.js";
 import { cargoFareTenths, fmtFujitech, fujitechTenthsOf, spendFujitech } from "./fujitech.js";
+import { fujitechUnlimited } from "./perks.js";
 
 const presets = ["Any parcel", "Octee peanuts", "Lost suitcase", "Mysterious airport object", "JoelAI server part", "Other Octee item"];
 function routeMiles(from, to) {
@@ -28,7 +29,7 @@ const fillParcels = () => parcel.replaceChildren(...presets.map((x) => el("optio
 fillParcels();
 function render() {
   const u = currentUser();
-  $("#cargo-balance").textContent = u ? fmtFujitech(fujitechTenthsOf(u)) : "Sign in to view balance";
+  $("#cargo-balance").textContent = u ? fmtFujitech(fujitechTenthsOf(u)) + (fujitechUnlimited(u) ? " · unlimited is on, nothing is deducted" : "") : "Sign in to view balance";
   const kg = Math.max(.1, Number(weight.value) || .1), miles = routeMiles(from.value, to.value), price = cargoFareTenths(miles, kg);
   $("#cargo-price").textContent = fmtFujitech(price);
   $("#cargo-route").textContent = `${miles.toLocaleString("en-GB")} route miles · ${kg} kg`;
@@ -57,4 +58,5 @@ form.addEventListener("submit", (e) => {
   } catch (err) { setMsg(message, err.message, "error"); }
 });
 window.addEventListener("octee:account", render);
+window.addEventListener("octee:perks", render);
 render();

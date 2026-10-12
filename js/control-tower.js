@@ -126,6 +126,8 @@ function login(crew) {
 /* ----- inside ----- */
 async function tower(session, crew, notice = "") {
   const published = await fetchJson("data/codes.json", { codes: [] });
+  const publishedPerks = await fetchJson("data/perks.json", { unlimitedFujitech: {} });
+  const perksDraft = { unlimitedFujitech: { ...(publishedPerks.unlimitedFujitech || {}) } };
   const publishedDiscounts = await fetchJson("data/flight-discounts.json", { discounts: [] });
   let codes = load(DRAFT_CODES, null) || published.codes || [];
   let discounts = load("octee.tower.discounts", null) || publishedDiscounts.discounts || [];
@@ -268,6 +270,21 @@ async function tower(session, crew, notice = "") {
 
   // Accounts "etched in the code": data/accounts.json. An account in that file can log in on any device and
   // arrives with its balances and trips as saved here.
+  // The only place the "unlimited Fujitech" switch exists. Saved to the cloud like everything else here.
+  function perksCard() {
+    const pmsg = el("p", { class: "msg", "aria-live": "polite" });
+    const on = el("input", { type: "checkbox", id: "perk-octee", checked: perksDraft.unlimitedFujitech.octee === true });
+    on.addEventListener("change", () => { if (on.checked) perksDraft.unlimitedFujitech.octee = true; else delete perksDraft.unlimitedFujitech.octee; setMsg(pmsg, "Changed. Press Save to cloud to apply it.", "info"); });
+    return el("div", { class: "card", style: "margin-bottom:12px" },
+      el("h3", {}, "Unlimited Fujitech"),
+      el("p", { class: "note" }, "When this is on, the Octee account books flights and cargo without spending Fujitech. The Fujitech it has earned is never reduced and still shows at the top of the site. Only this panel can change it."),
+      el("div", { class: "row" }, el("div", { class: "field" }, el("label", { for: "perk-octee" }, on, " Octee: unlimited Fujitech"))),
+      el("div", { class: "actions" },
+        el("button", { class: "btn", type: "button", onclick: () => saveToCloud("perks", perksDraft, pmsg, "The setting") }, "Save to cloud"),
+        el("button", { class: "btn small ghost", type: "button", onclick: () => download("perks.json", perksDraft) }, "Manual download: perks.json")),
+      pmsg);
+  }
+
   function accountsPanel() {
     const USERS = "octee.users";
     const local = load(USERS, {});
@@ -308,6 +325,7 @@ async function tower(session, crew, notice = "") {
       return { accounts: out };
     };
     return el("div", {},
+      perksCard(),
       el("div", { class: "card" },
         el("h3", {}, `Accounts (${keys.length})`),
         el("p", { class: "note" }, "An account saved to the cloud can sign in on any device and receives the balances and trips recorded at the time of saving. Tick the accounts to save from this browser, then press Save to cloud."),

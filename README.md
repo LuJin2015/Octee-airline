@@ -56,3 +56,7 @@ Transfers use the real Scraggy Airlines flights, loaded from `https://zengyixin0
 ## Fujitech and cargo
 
 Octee Airline Cargo has its own page at `cargo.html`. Cargo and passenger fares use Fujitech, with an exchange rate of 50 Octmiles for 5.5 Fujitech. Passenger cabin prices vary by class; Platinum Wing pays the Economy rate. Cargo fares vary by shortest route distance and parcel weight.
+
+## GulletAI Smart mode (optional)
+
+On the Customer Service page, "Turn on Smart mode" downloads TinyLlama-1.1B-Chat (`Xenova/TinyLlama-1.1B-Chat-v1.0`, via transformers.js from jsDelivr and Hugging Face) and runs it inside the visitor's browser. Nothing is sent to a server. The rulebook still handles tickets, refunds and holds; the model only answers open-ended questions, using the handbook's answer as its facts, and any failure falls back to the rulebook. Settings: `GULLET_MODEL` and `GULLET_LIB` in `js/config.js`. Not verified against the real model from the build environment (Hugging Face was not reachable there).
