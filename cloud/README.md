@@ -9,7 +9,7 @@ A small Cloudflare Worker + D1 database. It stores a login and ONE saved JSON pr
 - Passwords: PBKDF2-SHA256 (100,000 rounds). Session tokens are stored hashed. 5 wrong logins locks that name+IP for 5 minutes; at most 5 new accounts per IP, then a 5 minute wait.
 - PUT /api/profile: `{ profile, baseUpdatedAt }`. If someone else saved first the answer is 409 with the newer copy (the site then loads it).
 - To redeploy with wrangler: create the D1 database, put its id in `wrangler.toml`, run `wrangler d1 execute octee-cloud --file schema.sql --remote`, then `wrangler deploy`.
-- The profile is trusted from the browser, as everywhere else on Octee. Do not reuse real passwords.
+- The profile is saved from the browser, but the **balances are owned by the cloud** (table `balances`: Octmiles, lifetime Octmiles, Octeetokens, Fujitech, Scraggymiles; see "Cloud-owned balances" below). Everything else in the profile is trusted from the browser. Do not reuse real passwords.
 
 ## JoelAI Pro ledger
 
@@ -34,3 +34,13 @@ A small Cloudflare Worker + D1 database. It stores a login and ONE saved JSON pr
 - The site reads the cloud copy first and falls back to the file in `data/` (`js/published.js`), and the Worker's etched-account list does the same. Every Tower panel keeps a "Manual download" button for when the cloud has a problem.
 - Run the new `published` table from `schema.sql`, then redeploy the Worker.
 - `perks` is a fifth published file: `{ "unlimitedFujitech": { "octee": true } }`. Only the Control Tower (Accounts tab) can change it. The site reads it (`js/perks.js`) and `spendFujitech` skips the deduction for accounts listed there; the earned Fujitech balance is never touched.
+
+## Cloud-owned balances
+Octmiles, Octeetokens, Fujitech and Scraggymiles of a **cloud account** are kept by the Worker in the `balances` table. The browser still works the numbers out and writes a history line for each change; when it saves the account (`PUT /api/profile`) the Worker (`applyWallet` in `index.js`) reads only the **new** history lines:
+
+- spending (negative amounts) is always accepted, and never takes a balance below zero;
+- a credit is accepted only when a rule explains it: an exchange at the real rate (10 Octmiles = 1 Octeetoken, 50 Octmiles = 5.5 Fujitech, 1 Scraggymile = 2 Octmiles), a code that exists in `codes` (single use unless it repeats; the top-tier bonus and the permission grants are checked), a booking that really is in the account (up to 2,800 Octmiles per booking and 3,000 a day), the JOELMOBILE ride, the first review;
+- everything else is dropped. If the cloud's numbers differ from what the browser claimed, the reply carries `corrected: true` and the saved copy, the browser takes it and shows a short notice.
+
+The starting balance of an account is what it **already had saved in the cloud**; an etched account starts from its record in `accounts.json`; a brand-new cloud account starts with the 100 Octmiles welcome bonus (the progress of a local-only account is not imported when it is linked). Unlock and top-ups of JoelAI Pro take Octeetokens from this balance. Accounts that are not in the cloud keep working locally, with browser-owned numbers.
+Honest limits: the browser still decides which bookings and rides happened, so those credits are rate-limited rather than proven; spending less than the real price is not detected; Scraggymiles taken from the shared pot of the other site are capped at 300 a day. Apply `schema.sql` (the `balances` table) before deploying.

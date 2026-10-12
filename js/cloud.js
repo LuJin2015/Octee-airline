@@ -117,6 +117,8 @@ export async function push(now = false) {
     if (s.updatedAt) body.baseUpdatedAt = s.updatedAt;
     const r = await call("PUT", "/api/profile", body, s.token);
     setState({ ...s, updatedAt: r.updatedAt, dirty: false }); lastError = "";
+    // The cloud owns the balances (Octmiles, Octeetokens, Fujitech, Scraggymiles). If it did not accept a change, take its copy.
+    if (r.corrected && r.profile) { await applyServer({ ...s, updatedAt: r.updatedAt }, r.profile, r.updatedAt, false); showCorrected(); }
     window.dispatchEvent(new CustomEvent("octee:cloud"));
     return true;
   } catch (e) {
@@ -124,6 +126,16 @@ export async function push(now = false) {
     if (e.status === 401) { setState(null); lastError = "login"; window.dispatchEvent(new CustomEvent("octee:cloud")); return false; }
     lastError = e.code; setState({ ...s, dirty: true }); window.dispatchEvent(new CustomEvent("octee:cloud")); return false;
   } finally { pushing = false; }
+}
+function showCorrected() {
+  try {
+    const n = document.createElement("div");
+    n.setAttribute("role", "status");
+    n.style.cssText = "position:fixed;left:50%;bottom:16px;transform:translateX(-50%);max-width:90vw;background:#1f2a44;color:#fff;padding:10px 14px;border-radius:10px;z-index:9999;font:14px system-ui,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.3)";
+    n.textContent = "The cloud keeps your balances, and it corrected them to match its records.";
+    document.body.append(n);
+    setTimeout(() => n.remove(), 7000);
+  } catch { /* no page */ }
 }
 async function applyServer(s, profile, updatedAt, conflict = false) {
   const u = currentUser(); if (!u || !profile) return;

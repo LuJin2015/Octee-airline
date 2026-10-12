@@ -149,7 +149,7 @@ export async function changePassword(current, next, confirm) {
 // The part of an account that is saved to the cloud: everything except the local password hash.
 export function profileOf(u) {
   const { salt, hash, codeFails, ...rest } = u || {};
-  return { ...rest, history: (u?.history || []).slice(-60) };
+  return { ...rest, history: (u?.history || []).slice(0, 60) };   // newest first, so the newest 60 are the first 60
 }
 export async function localPasswordOk(username, password) {
   const u = allUsers()[String(username || "").trim().toLowerCase()];

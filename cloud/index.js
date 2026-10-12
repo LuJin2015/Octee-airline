@@ -36,7 +36,7 @@ async function etchedList(env) {
     let j = null;
     if (row) { try { j = JSON.parse(row.body); } catch { j = null; } }
     if (!j) { const r = await fetch(env.ETCHED_URL || ETCHED_URL, { cf: { cacheTtl: 60 } }); j = r.ok ? await r.json() : null; }
-    if (j && Array.isArray(j.accounts)) etchedMemo = { at: Date.now(), list: j.accounts.filter((a) => a && a.username && a.hash).map((a) => ({ key: String(a.username).toLowerCase(), name: String(a.username), hash: String(a.hash) })) };
+    if (j && Array.isArray(j.accounts)) etchedMemo = { at: Date.now(), list: j.accounts.filter((a) => a && a.username && a.hash).map((a) => ({ key: String(a.username).toLowerCase(), name: String(a.username), hash: String(a.hash), rec: a })) };
   } catch { /* keep the old list */ }
   return etchedMemo.list;
 }
@@ -54,6 +54,112 @@ async function perkOn(db, key, username) {
 // Joel models with a flat JoelToken price (they report no token usage). Mirrors js/joel-models.js.
 const FLAT = { "joel-3.3pro": { price: 150, name: "Joel-3.3 Pro" }, "joel-4.3neo": { price: 400, name: "Joel-4.3 NEO" } };
 const clip = (v, n) => String(v ?? "").slice(0, n);
+
+
+// ---- Octmiles, Octeetokens, Fujitech and Scraggymiles: the cloud keeps the balances (table `balances`) ----
+// The browser still works the numbers out locally and writes a history line for each change. When it saves the account, the cloud
+// checks the change against those new history lines: spending is always accepted (never below zero), but a credit is only accepted
+// when a rule explains it (an exchange at the real rate, a code that really exists, a booking that really is in the account, ...).
+// Anything else is dropped, and the cloud's balance is sent back and replaces the browser's copy.
+const WALLET = { tokenRate: 10, fujiMiles: 50, fujiTenths: 55, scraggyRate: 2, topTier: 10000, welcome: 100,
+  bookEntry: 2800, bookDay: 3000, scraggyEntry: 2000, scraggyDay: 3000, rideMiles: 20, rideDay: 200, reviewMiles: 30, potDay: 300 };
+const wint = (v) => Math.max(0, Math.floor(Number(v) || 0));
+const balFromProfile = (p) => ({ octmiles: wint(p?.octmiles), lifetime: wint(p?.lifetime), tokens: wint(p?.tokens), fujitech: wint(p?.fujitechTenths), scraggy: wint(p?.scraggymiles) });
+const balanceFields = (b) => ({ octmiles: b.octmiles, lifetime: b.lifetime, tokens: b.tokens, fujitechTenths: b.fujitech, scraggymiles: b.scraggy });
+async function getBalances(db, env, u) {
+  const row = await db.prepare("SELECT * FROM balances WHERE user_id=?").bind(u.id).first();
+  if (row) { let st = {}; try { st = JSON.parse(row.state || "{}"); } catch { st = {}; } return { user_id: u.id, octmiles: row.octmiles, lifetime: row.lifetime, tokens: row.tokens, fujitech: row.fujitech, scraggy: row.scraggy, state: { codes: {}, uses: {}, review: false, days: {}, ...st } }; }
+  // first time: start from what the account already has saved in the cloud, an etched account's own record, or the welcome bonus
+  const p = await db.prepare("SELECT body FROM profiles WHERE user_id=?").bind(u.id).first();
+  let prof = null; try { prof = p ? JSON.parse(p.body) : null; } catch { prof = null; }
+  const e = prof ? null : (await etchedList(env)).find((x) => x.key === u.username_key || x.key === String(u.username).toLowerCase());
+  const seed = prof ? balFromProfile(prof) : e ? balFromProfile(e.rec) : { octmiles: WALLET.welcome, lifetime: WALLET.welcome, tokens: 0, fujitech: 0, scraggy: 0 };
+  const src = prof || (e && e.rec) || {};
+  const codes = {}; for (const h of Object.keys(src.codesUsed || {})) codes[h] = true;
+  const uses = {}; for (const [h, n] of Object.entries(src.repeatUses || {})) uses[h] = wint(n);
+  return { user_id: u.id, ...seed, state: { codes, uses, review: !!src.reviewBonus, days: {} } };
+}
+const saveBalances = (db, b) => db.prepare("INSERT INTO balances(user_id,octmiles,lifetime,tokens,fujitech,scraggy,state,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET octmiles=?, lifetime=?, tokens=?, fujitech=?, scraggy=?, state=?, updated_at=?")
+  .bind(b.user_id, b.octmiles, b.lifetime, b.tokens, b.fujitech, b.scraggy, JSON.stringify(b.state), iso(), b.octmiles, b.lifetime, b.tokens, b.fujitech, b.scraggy, JSON.stringify(b.state), iso());
+// Control Tower files (codes, permissions): the saved copy first, the file on GitHub Pages as the fallback. Cached for a minute.
+const dataMemo = {};
+async function publishedData(env, db, name) {
+  const m = dataMemo[name];
+  if (m && Date.now() - m.at < 60000) return m.value;
+  let value = null;
+  const row = await db.prepare("SELECT body FROM published WHERE name=?").bind(name).first().catch(() => null);
+  if (row) { try { value = JSON.parse(row.body); } catch { value = null; } }
+  if (!value) { try { const r = await fetch((env.DATA_BASE || ETCHED_URL.replace(/accounts\.json$/, "")) + name + ".json", { cf: { cacheTtl: 60 } }); value = r.ok ? await r.json() : null; } catch { value = null; } }
+  dataMemo[name] = { at: Date.now(), value };
+  return value;
+}
+const histKey = (e) => JSON.stringify([e && e.at, e && e.text, wint2(e?.amount), wint2(e?.tokens), wint2(e?.fujitechTenths), wint2(e?.scraggy)]);
+const wint2 = (v) => Math.trunc(Number(v) || 0);
+// Check the new history lines of a saved account against the cloud's balance. Returns the cloud's balance after them.
+async function applyWallet(env, db, u, bal, prevProf, nextProf) {
+  const b = { ...bal, state: { ...bal.state, codes: { ...bal.state.codes }, uses: { ...bal.state.uses }, days: { ...bal.state.days } } };
+  const seen = new Map();
+  for (const e of (prevProf && Array.isArray(prevProf.history)) ? prevProf.history : []) seen.set(histKey(e), (seen.get(histKey(e)) || 0) + 1);
+  const fresh = [];
+  const hist = Array.isArray(nextProf.history) ? nextProf.history : [];
+  for (let i = hist.length - 1; i >= 0; i--) { const k = histKey(hist[i]); if (seen.get(k) > 0) seen.set(k, seen.get(k) - 1); else if (prevProf) fresh.push(hist[i]); } // oldest first; the very first save only sets the balance
+  const day = iso().slice(0, 10);
+  const today = (b.state.days[day] = { book: 0, scraggy: 0, ride: 0, pot: 0, ...(b.state.days[day] || {}) });
+  for (const k of Object.keys(b.state.days)) if (k < day) delete b.state.days[k];
+  const prevRefs = new Set(((prevProf && prevProf.trips) || []).map((t) => t && t.ref));
+  const trips = Array.isArray(nextProf.trips) ? nextProf.trips : [];
+  const moveOut = (dM, dT, dF, dS) => { b.octmiles = Math.max(0, b.octmiles + Math.min(0, dM)); b.tokens = Math.max(0, b.tokens + Math.min(0, dT)); b.fujitech = Math.max(0, b.fujitech + Math.min(0, dF)); b.scraggy = Math.max(0, b.scraggy + Math.min(0, dS)); };
+  const credit = (dM, dT, dF, dS, life) => { b.octmiles += dM; b.tokens += dT; b.fujitech += dF; b.scraggy += dS; if (life) b.lifetime += dM; };
+  let codes = null, perms = null;
+  for (const e of fresh) {
+    const text = String(e.text || ""), dM = wint2(e.amount), dT = wint2(e.tokens), dF = wint2(e.fujitechTenths), dS = wint2(e.scraggy);
+    if (/^Welcome bonus/.test(text)) continue;
+    if (dM <= 0 && dT <= 0 && dF <= 0 && dS <= 0) { moveOut(dM, dT, dF, dS); continue; }          // spending
+    if (text === "Exchanged Octmiles for Octeetokens") {
+      if (dM < 0 && dT > 0 && !dF && !dS && -dM === dT * WALLET.tokenRate && b.octmiles >= -dM) { b.octmiles += dM; b.tokens += dT; }
+    } else if (text === "Exchanged Octmiles for Fujitech") {
+      if (dM < 0 && dF > 0 && !dT && !dS && -dM % WALLET.fujiMiles === 0 && dF === (-dM / WALLET.fujiMiles) * WALLET.fujiTenths && b.octmiles >= -dM) { b.octmiles += dM; b.fujitech += dF; }
+    } else if (/^Exchanged Scraggymiles for Octmiles/.test(text)) {
+      if (dS < 0 && dM === -dS * WALLET.scraggyRate && !dT && !dF) {
+        const short = Math.max(0, -dS - b.scraggy);                                                 // the part that came from the pot shared with Scraggy Airlines
+        if (short <= WALLET.potDay - today.pot) { today.pot += short; b.scraggy = Math.max(0, b.scraggy + dS); credit(dM, 0, 0, 0, true); }
+      }
+    } else if (/^Booking SCRAG-/.test(text)) {
+      const ref = (text.match(/^Booking (SCRAG-\d+)/) || [])[1], t = trips.find((x) => x && x.scraggyRef === ref);
+      if (dS > 0 && !dM && t && !prevRefs.has(t.ref) && dS <= WALLET.scraggyEntry && today.scraggy + dS <= WALLET.scraggyDay) { today.scraggy += dS; credit(0, 0, 0, dS, false); }
+    } else if (/^Booking OCT-/.test(text)) {
+      const ref = (text.match(/^Booking (OCT-\d+)/) || [])[1], t = trips.find((x) => x && x.ref === ref);
+      if (dM > 0 && !dT && !dF && !dS && t && !prevRefs.has(t.ref) && dM <= WALLET.bookEntry && today.book + dM <= WALLET.bookDay) { today.book += dM; credit(dM, 0, 0, 0, true); }
+    } else if (/^Code \S+$/.test(text)) {
+      const hash = await sha("octee-code:" + text.slice(5).toUpperCase().replace(/\s+/g, ""));
+      codes = codes || ((await publishedData(env, db, "codes")) || {}).codes || [];
+      const digits = text.slice(5).toUpperCase().replace(/[^0-9]/g, "");
+      let c = codes.find((x) => x && x.hash === hash);
+      if (!c && /^[12]\d{3}[13579]$/.test(text.slice(5)) ) c = { octmiles: Number(digits.slice(0, 3)), active: true };
+      if (!c || c.active === false || (c.expires && new Date(c.expires + "T23:59:59") < new Date())) continue;
+      if (!c.repeat && b.state.codes[hash]) continue;
+      const top = c.atTopTier && b.lifetime >= WALLET.topTier ? c.atTopTier : null;
+      if (top && c.freeTopUses != null) {
+        perms = perms || ((await publishedData(env, db, "permissions")) || {}).crew || {};
+        if ((b.state.uses[hash] || 0) >= c.freeTopUses + wint(perms[String(u.username).toLowerCase()])) continue;
+        b.state.uses[hash] = (b.state.uses[hash] || 0) + 1;
+      }
+      const wantM = top ? wint(top.octmiles) : wint(c.octmiles), wantT = top ? wint(top.tokens) : 0;
+      if (dM !== wantM || dT !== wantT || dF || dS) continue;
+      b.state.codes[hash] = true;
+      credit(dM, dT, 0, 0, true);
+    } else if (text === "JOELMOBILE ride (you were helped)") {
+      if (dM === WALLET.rideMiles && !dT && !dF && !dS && today.ride + dM <= WALLET.rideDay) { today.ride += dM; credit(dM, 0, 0, 0, true); }
+    } else if (text === "First review") {
+      if (dM === WALLET.reviewMiles && !dT && !dF && !dS && !b.state.review) { b.state.review = true; credit(dM, 0, 0, 0, true); }
+    } else moveOut(Math.min(0, dM), Math.min(0, dT), Math.min(0, dF), Math.min(0, dS));         // anything else may only take away
+  }
+  return b;
+}
+async function profileView(db, env, u, body) {
+  const prof = JSON.parse(body);
+  return { ...prof, ...balanceFields(await getBalances(db, env, u)), ...joelFields(await wallet(db, u.id)) };
+}
 
 // ---- JoelAI Pro wallet: Pro flag, purchased JoelTokens, this month's use. Lives on the server only. ----
 const monthNow = () => new Date().toISOString().slice(0, 7);
@@ -180,15 +286,15 @@ export default {
         const cost = buying ? count : free ? 0 : JOEL.price;
         const p = await db.prepare("SELECT body, updated_at FROM profiles WHERE user_id=?").bind(u.id).first();
         if (!p) return reply(req, { error: "no_profile", message: "Your account has not been saved to the cloud yet. Try again in a moment." }, 409);
-        const prof = JSON.parse(p.body), have = Math.max(0, Math.floor(Number(prof.tokens) || 0));
+        const prof = JSON.parse(p.body), bal = await getBalances(db, env, u), have = bal.tokens;
         if (have < cost) return reply(req, { error: "short", message: `You need ${cost - have} more Octeetoken${cost - have === 1 ? "" : "s"} (this costs ${cost}). Nothing was charged.` }, 402);
         if (buying) w.paid += count * JOEL.rate; else { w.pro = 1; w.month = monthNow(); w.used = 0; }
         const at = iso();
-        const next = { ...prof, tokens: have - cost, ...joelFields(w), history: [{ at, text: buying ? "Bought JoelTokens" : "Unlocked JoelAI Pro", amount: 0, tokens: -cost, ...(buying ? { joelTokens: count * JOEL.rate } : {}) }, ...(Array.isArray(prof.history) ? prof.history : [])].slice(0, 60) };
+        const next = { ...prof, ...balanceFields({ ...bal, tokens: have - cost }), ...joelFields(w), history: [{ at, text: buying ? "Bought JoelTokens" : "Unlocked JoelAI Pro", amount: 0, tokens: -cost, ...(buying ? { joelTokens: count * JOEL.rate } : {}) }, ...(Array.isArray(prof.history) ? prof.history : [])].slice(0, 60) };
         // compare-and-set on updated_at, so two devices cannot spend the same Octeetokens twice
         const done = await db.prepare("UPDATE profiles SET body=?, updated_at=? WHERE user_id=? AND updated_at=?").bind(JSON.stringify(next), at, u.id, p.updated_at).run();
         if (!done.meta?.changes) return reply(req, { error: "busy", message: "Your account changed at the same moment. Nothing was charged. Please try again." }, 409);
-        await db.batch([saveWallet(db, w), ledgerRow(db, u.id, buying ? "buy" : "unlock", -cost, buying ? count * JOEL.rate : 0)]);
+        await db.batch([saveWallet(db, w), saveBalances(db, { ...bal, tokens: have - cost }), ledgerRow(db, u.id, buying ? "buy" : "unlock", -cost, buying ? count * JOEL.rate : 0)]);
         return reply(req, { ok: true, ...walletView(w), tokens: have - cost, updatedAt: at });
       }
       // A flat-price answer (Joel-3.3 Pro, Joel-4.3 NEO). The price, the free list and the balance are all decided here.
@@ -282,20 +388,29 @@ export default {
         if (!u || !(await checkPassword(password, u.password_hash))) { await fail(db, k); return reply(req, { error: "bad_login" }, 401); }
         await clear(db, k);
         const p = await db.prepare("SELECT body, updated_at FROM profiles WHERE user_id=?").bind(u.id).first();
-        return reply(req, { ok: true, username: u.username, token: await newSession(db, u.id), profile: p ? await profileWithJoel(db, u.id, p.body) : null, updatedAt: p?.updated_at || null });
+        return reply(req, { ok: true, username: u.username, token: await newSession(db, u.id), profile: p ? await profileView(db, env, u, p.body) : null, updatedAt: p?.updated_at || null });
       }
       if (path === "/api/profile") {
         if (!u) return reply(req, { error: "login" }, 401);
         const p = await db.prepare("SELECT body, updated_at FROM profiles WHERE user_id=?").bind(u.id).first();
-        if (req.method === "GET") return reply(req, { username: u.username, profile: p ? await profileWithJoel(db, u.id, p.body) : null, updatedAt: p?.updated_at || null });
+        if (req.method === "GET") return reply(req, { username: u.username, profile: p ? await profileView(db, env, u, p.body) : null, updatedAt: p?.updated_at || null });
         if (req.method === "PUT") {
           const text = await req.text();
           if (text.length > MAX_PROFILE) return reply(req, { error: "too_big" }, 413);
           let b; try { b = JSON.parse(text); } catch { return reply(req, { error: "bad_json" }, 400); }
           if (!b || typeof b.profile !== "object" || b.profile === null || Array.isArray(b.profile)) return reply(req, { error: "bad_profile" }, 400);
-          if (b.baseUpdatedAt !== undefined && p && p.updated_at !== b.baseUpdatedAt && !b.force) return reply(req, { error: "conflict", profile: await profileWithJoel(db, u.id, p.body), updatedAt: p.updated_at }, 409);
-          const at = iso(), merged = JSON.stringify({ ...b.profile, ...joelFields(await wallet(db, u.id)) });
-          await db.prepare("INSERT INTO profiles(user_id,body,updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET body=?, updated_at=?").bind(u.id, merged, at, merged, at).run();
+          if (b.baseUpdatedAt !== undefined && p && p.updated_at !== b.baseUpdatedAt && !b.force) return reply(req, { error: "conflict", profile: await profileView(db, env, u, p.body), updatedAt: p.updated_at }, 409);
+          const at = iso(), bal = await getBalances(db, env, u);
+          let prevProf = null; try { prevProf = p ? JSON.parse(p.body) : null; } catch { prevProf = null; }
+          const after = await applyWallet(env, db, u, bal, prevProf, b.profile);
+          const claimed = JSON.stringify(balFromProfile(b.profile)), actual = JSON.stringify({ octmiles: after.octmiles, lifetime: after.lifetime, tokens: after.tokens, fujitech: after.fujitech, scraggy: after.scraggy });
+          const merged = { ...b.profile, ...balanceFields(after), ...joelFields(await wallet(db, u.id)) };
+          await db.batch([
+            db.prepare("INSERT INTO profiles(user_id,body,updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET body=?, updated_at=?").bind(u.id, JSON.stringify(merged), at, JSON.stringify(merged), at),
+            saveBalances(db, after)
+          ]);
+          // when the cloud's numbers differ from the ones the browser claimed, send the saved copy back so the browser takes it
+          if (claimed !== actual) return reply(req, { ok: true, updatedAt: at, corrected: true, profile: merged });
           return reply(req, { ok: true, updatedAt: at });
         }
       }

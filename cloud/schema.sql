@@ -75,3 +75,16 @@ CREATE TABLE IF NOT EXISTS published (
   updated_at TEXT NOT NULL,
   updated_by TEXT NOT NULL DEFAULT ''
 );
+
+-- Octmiles, Octeetokens, Fujitech and Scraggymiles. The cloud owns these numbers: see applyWallet() in index.js.
+CREATE TABLE IF NOT EXISTS balances (
+  user_id INTEGER PRIMARY KEY,
+  octmiles INTEGER NOT NULL DEFAULT 0,
+  lifetime INTEGER NOT NULL DEFAULT 0,
+  tokens INTEGER NOT NULL DEFAULT 0,
+  fujitech INTEGER NOT NULL DEFAULT 0,
+  scraggy INTEGER NOT NULL DEFAULT 0,
+  state TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
